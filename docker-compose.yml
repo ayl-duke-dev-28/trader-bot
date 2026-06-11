@@ -1,0 +1,18 @@
+services:
+  trader:
+    build: .
+    image: trader-bot:latest
+    container_name: trader-bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Persist models, cached data, and logs across container rebuilds
+      - ./models:/app/models
+      - ./data_cache:/app/data_cache
+      - ./logs:/app/logs
+    # No exposed ports — the bot only makes outbound API calls
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

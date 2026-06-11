@@ -1,0 +1,48 @@
+# Trader-bot configuration. Edit this file to tune behavior.
+# Secrets live in .env, NOT here.
+
+mode: paper            # paper | live   -- live requires extra env keys and trips safeguards
+dry_run: false         # if true, compute signals + log intended orders but submit nothing
+
+universe:
+  # Source: which set of NYSE tickers to trade
+  source: file         # file | sp500_nyse
+  file_path: src/data/nyse_universe.txt
+  max_symbols: 50      # cap, to stay friendly with free rate limits
+
+data:
+  history_days: 400    # how much daily history to pull per symbol
+  cache_dir: data_cache
+
+strategies:
+  classical:
+    enabled: true
+    weight: 0.4
+  ml:
+    enabled: true
+    weight: 0.4
+    model_path: models/xgb_direction.joblib
+    min_probability: 0.55   # only act when model confidence exceeds this
+  politicians:
+    enabled: true
+    weight: 0.2
+    lookback_days: 30
+    min_trade_amount_usd: 50000   # ignore tiny disclosures
+    follow_senators: true
+    follow_representatives: true
+
+risk:
+  max_position_pct: 0.05            # no single position > 5% of equity
+  max_gross_exposure: 0.80          # total long exposure cap
+  max_positions: 20
+  daily_loss_kill_switch_pct: 0.03  # halt new buys if equity drops >3% intraday
+  per_trade_stop_loss_pct: 0.05     # exit if a position drops 5% from entry
+
+schedule:
+  run_interval_minutes: 60   # how often the main loop runs during market hours
+  pre_market_buffer_min: 5   # wait this long after open before trading
+  flatten_before_close_min: 0  # 0 = hold overnight; set >0 to close positions before close
+
+logging:
+  level: INFO
+  file: logs/trader.log

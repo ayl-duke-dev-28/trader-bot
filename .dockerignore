@@ -1,0 +1,17 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.env
+.DS_Store
+.ipynb_checkpoints/
+data_cache/
+logs/
+models/*.joblib
+models/*.pkl
+*.log
+README.md
+docs/
+tests/
