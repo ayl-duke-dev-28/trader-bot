@@ -24,7 +24,7 @@ strategies:
     model_path: models/xgb_direction.joblib
     min_probability: 0.55   # only act when model confidence exceeds this
   politicians:
-    enabled: true
+    enabled: false
     weight: 0.2
     lookback_days: 30
     min_trade_amount_usd: 50000   # ignore tiny disclosures
