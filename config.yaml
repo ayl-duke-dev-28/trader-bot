@@ -8,7 +8,7 @@ universe:
   # Source: which set of NYSE tickers to trade
   source: file         # file | sp500_nyse
   file_path: src/data/nyse_universe.txt
-  max_symbols: 50      # cap, to stay friendly with free rate limits
+  max_symbols: 300     # cap, expanded for broad tech/AI universe while limiting free API load
 
 data:
   history_days: 400    # how much daily history to pull per symbol
