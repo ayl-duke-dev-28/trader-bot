@@ -10,7 +10,10 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.signals.classical import classical_signal
+from src.signals.hedge_fund import hedge_fund_decision
 from src.signals.ml import build_features
+from src.risk.manager import RiskManager, TradeIntent
+from src.trader import _consolidate_intents
 
 
 def _fake_df(n: int = 200) -> pd.DataFrame:
@@ -41,7 +44,39 @@ def test_build_features_shape():
     assert "rsi_14" in feats.columns
 
 
+def test_hedge_fund_signal_in_range():
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            return default
+
+    decision = hedge_fund_decision(DummyConfig(), _fake_df(), bundle=None)
+    assert -1.0 <= decision.score <= 1.0
+    assert decision.signal in {"bullish", "bearish", "neutral"}
+    assert decision.votes
+
+
+def test_intent_to_qty_whole_share_mode():
+    intent = TradeIntent("MKSI", "buy", 399.59, "score=0.40")
+    assert RiskManager.intent_to_qty(intent, 390.99, allow_fractional=False) == 1.0
+    assert RiskManager.intent_to_qty(intent, 390.99, allow_fractional=True) == 1.022
+
+
+def test_consolidate_duplicate_buy_intents():
+    intents = [
+        TradeIntent("MKSI", "buy", 390.99, "score=0.30"),
+        TradeIntent("MKSI", "buy", 1_954.95, "score=0.50"),
+        TradeIntent("NVDA", "buy", 500.0, "score=0.40"),
+    ]
+    merged = _consolidate_intents(intents)
+    assert len(merged) == 2
+    assert merged[0].symbol == "MKSI"
+    assert merged[0].target_dollars == 2_345.94
+
+
 if __name__ == "__main__":
     test_classical_signal_in_range()
     test_build_features_shape()
+    test_hedge_fund_signal_in_range()
+    test_intent_to_qty_whole_share_mode()
+    test_consolidate_duplicate_buy_intents()
     print("smoke tests OK")

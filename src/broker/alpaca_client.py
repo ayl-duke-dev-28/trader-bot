@@ -10,7 +10,8 @@ from dataclasses import dataclass
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import QueryOrderStatus
+from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest
 
 from src.config import Config
 
@@ -69,6 +70,25 @@ class AlpacaBroker:
 
     def is_market_open(self) -> bool:
         return bool(self.client.get_clock().is_open)
+
+    def open_order_symbols(self, side: str | None = None) -> set[str]:
+        """Return symbols with currently open orders, optionally filtered by side."""
+        try:
+            orders = self.client.get_orders(filter=GetOrdersRequest(status=QueryOrderStatus.OPEN))
+        except Exception as e:
+            log.warning("open orders fetch failed: %s", e)
+            return set()
+
+        out: set[str] = set()
+        side_filter = side.lower() if side else None
+        for order in orders:
+            order_side = str(getattr(order, "side", "")).lower()
+            if side_filter and side_filter not in order_side:
+                continue
+            symbol = str(getattr(order, "symbol", "")).upper()
+            if symbol:
+                out.add(symbol)
+        return out
 
     def submit_market_order(self, symbol: str, qty: float, side: str) -> str | None:
         if qty <= 0:

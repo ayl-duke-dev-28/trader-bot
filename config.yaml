@@ -4,6 +4,9 @@
 mode: paper            # paper | live   -- live requires extra env keys and trips safeguards
 dry_run: false         # if true, compute signals + log intended orders but submit nothing
 
+execution:
+  fractional_shares: false  # false = whole-share buy orders; avoids split fractional fills in Alpaca
+
 universe:
   # Source: which set of NYSE tickers to trade
   source: file         # file | sp500_nyse
@@ -15,6 +18,8 @@ data:
   cache_dir: data_cache
 
 strategies:
+  hedge_fund:
+    enabled: true     # multi-analyst ensemble inspired by ai-hedge-fund decision flow
   classical:
     enabled: true
     weight: 0.4

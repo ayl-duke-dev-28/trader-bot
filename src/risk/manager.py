@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from math import floor
 
 from src.broker.alpaca_client import AlpacaBroker, Position
 from src.config import Config
@@ -104,9 +105,12 @@ class RiskManager:
         return intents
 
     @staticmethod
-    def intent_to_qty(intent: TradeIntent, price: float) -> float:
+    def intent_to_qty(intent: TradeIntent, price: float, allow_fractional: bool = True) -> float:
         if price <= 0:
             return 0.0
         qty = intent.target_dollars / price
-        # Alpaca supports fractional shares; round to 4 decimals to be safe
+        if not allow_fractional:
+            return float(floor(qty))
+        # Alpaca supports fractional shares; round to 4 decimals to be safe.
+        # Fractional fills may appear as separate whole + fractional activity rows.
         return round(qty, 4)

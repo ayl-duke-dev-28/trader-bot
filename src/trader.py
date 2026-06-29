@@ -12,11 +12,32 @@ from src.config import Config, ROOT, load_config
 from src.data.market_data import get_history_many
 from src.data.universe import load_universe
 from src.politicians.tracker import politician_signals
-from src.risk.manager import RiskManager
+from src.risk.manager import RiskManager, TradeIntent
 from src.signals.classical import classical_signal
+from src.signals.hedge_fund import hedge_fund_decision
 from src.signals.ml import load_model, ml_signal
 
 log = logging.getLogger(__name__)
+
+
+def _consolidate_intents(intents: list[TradeIntent]) -> list[TradeIntent]:
+    """Merge duplicate same-side intents so one symbol gets one order per cycle."""
+    merged: dict[tuple[str, str], TradeIntent] = {}
+    order: list[tuple[str, str]] = []
+    for intent in intents:
+        key = (intent.symbol, intent.side)
+        if key not in merged:
+            merged[key] = intent
+            order.append(key)
+            continue
+        prev = merged[key]
+        merged[key] = TradeIntent(
+            symbol=prev.symbol,
+            side=prev.side,
+            target_dollars=prev.target_dollars + intent.target_dollars,
+            reason=f"{prev.reason}; {intent.reason}",
+        )
+    return [merged[key] for key in order]
 
 
 def _setup_logging(cfg: Config) -> None:
@@ -57,6 +78,7 @@ def compute_signals(cfg: Config, symbols: list[str]) -> dict[str, float]:
     """Composite signal in [-1, 1] per symbol."""
     history = get_history_many(cfg, symbols)
     bundle = load_model(cfg) if cfg.get("strategies", "ml", "enabled", default=True) else None
+    use_hedge_fund = bool(cfg.get("strategies", "hedge_fund", "enabled", default=False))
 
     w_cls = float(cfg.get("strategies", "classical", "weight", default=0.4)) if cfg.get("strategies", "classical", "enabled", default=True) else 0.0
     w_ml = float(cfg.get("strategies", "ml", "weight", default=0.4)) if cfg.get("strategies", "ml", "enabled", default=True) else 0.0
@@ -70,6 +92,11 @@ def compute_signals(cfg: Config, symbols: list[str]) -> dict[str, float]:
         df = history.get(sym)
         if df is None or df.empty:
             out[sym] = 0.0
+            continue
+        if use_hedge_fund:
+            decision = hedge_fund_decision(cfg, df, bundle=bundle)
+            out[sym] = decision.score
+            log.debug("hedge_fund_signal %s %s", sym, decision.reasoning)
             continue
         cls = classical_signal(df) if w_cls > 0 else 0.0
         ml = ml_signal(cfg, df, bundle=bundle) if (w_ml > 0 and bundle) else 0.0
@@ -94,19 +121,27 @@ def trade_once(cfg: Config) -> None:
     log.info("evaluating %d symbols", len(symbols))
     scores = compute_signals(cfg, symbols)
     prices = _last_prices(symbols)
-    intents = risk.size_orders(scores, prices)
+    intents = _consolidate_intents(risk.size_orders(scores, prices))
 
     if not intents:
         log.info("no trade intents this cycle")
         return
 
     dry = bool(cfg.get("dry_run", default=False))
+    allow_fractional = bool(cfg.get("execution", "fractional_shares", default=True))
+    open_buy_symbols = set() if dry else broker.open_order_symbols(side="buy")
     for intent in intents:
+        if intent.side == "buy" and intent.symbol in open_buy_symbols:
+            log.info("[SKIP] BUY %s: open buy order already pending", intent.symbol)
+            continue
         price = prices.get(intent.symbol, 0.0)
-        qty = RiskManager.intent_to_qty(intent, price)
+        qty = RiskManager.intent_to_qty(intent, price, allow_fractional=allow_fractional)
         msg = f"{intent.side.upper()} {intent.symbol} ~${intent.target_dollars:.0f} qty={qty} ({intent.reason})"
-        if dry or qty <= 0:
+        if dry:
             log.info("[DRY] %s", msg)
+            continue
+        if qty <= 0:
+            log.info("[SKIP] %s", msg)
             continue
         log.info(msg)
         if intent.side == "sell":
