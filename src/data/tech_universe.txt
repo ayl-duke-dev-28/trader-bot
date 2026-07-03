@@ -1,0 +1,113 @@
+# Curated tech-focused universe for the trader bot.
+# Only liquid US-listed tech names. Sector tags live in src/data/sectors.py.
+# Lines starting with # are ignored.
+
+# --- Mega-cap tech ---
+AAPL
+MSFT
+GOOGL
+GOOG
+AMZN
+META
+NVDA
+TSLA
+
+# --- AI / accelerated compute ---
+AMD
+AVGO
+TSM
+ASML
+SMCI
+DELL
+ANET
+VRT
+
+# --- Semiconductors ---
+INTC
+QCOM
+MU
+AMAT
+LRCX
+KLAC
+MRVL
+ADI
+TXN
+NXPI
+MCHP
+ON
+SWKS
+STM
+MTSI
+DIOD
+COHR
+SITM
+ARM
+GFS
+MPWR
+ENTG
+TER
+
+# --- Software / SaaS ---
+CRM
+ADBE
+INTU
+NOW
+ORCL
+SAP
+WDAY
+SNPS
+CDNS
+TEAM
+SHOP
+XYZ
+PYPL
+PLTR
+U
+APPS
+
+# --- Cloud infra / data ---
+NET
+SNOW
+DDOG
+MDB
+ESTC
+EQIX
+DLR
+AKAM
+
+# --- Cybersecurity ---
+CRWD
+PANW
+ZS
+S
+OKTA
+FTNT
+
+# --- Crypto-adjacent (high vol) ---
+MSTR
+COIN
+MARA
+CIFR
+RIOT
+CLSK
+HUT
+WULF
+IREN
+
+# --- Networking / hardware ---
+CSCO
+HPE
+JBL
+IBM
+
+# --- Streaming / consumer internet ---
+NFLX
+SPOT
+UBER
+ABNB
+DASH
+ROKU
+
+# --- Fintech rails ---
+V
+MA

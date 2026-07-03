@@ -8,10 +8,10 @@ execution:
   fractional_shares: false  # false = whole-share buy orders; avoids split fractional fills in Alpaca
 
 universe:
-  # Source: which set of NYSE tickers to trade
-  source: file         # file | sp500_nyse
-  file_path: src/data/nyse_universe.txt
-  max_symbols: 300     # cap, expanded for broad tech/AI universe while limiting free API load
+  # Source: which set of tickers to trade
+  source: file
+  file_path: src/data/tech_universe.txt
+  max_symbols: 120     # curated tech list; keep small for quality over breadth
 
 data:
   history_days: 400    # how much daily history to pull per symbol
@@ -19,7 +19,7 @@ data:
 
 strategies:
   hedge_fund:
-    enabled: true     # multi-analyst ensemble inspired by ai-hedge-fund decision flow
+    enabled: true     # multi-analyst ensemble
   classical:
     enabled: true
     weight: 0.4
@@ -28,25 +28,61 @@ strategies:
     weight: 0.4
     model_path: models/xgb_direction.joblib
     min_probability: 0.55   # only act when model confidence exceeds this
+    horizon_days: 5         # target = next-N-day direction (retrain after changing)
   politicians:
     enabled: false
     weight: 0.2
     lookback_days: 30
-    min_trade_amount_usd: 50000   # ignore tiny disclosures
+    min_trade_amount_usd: 50000
     follow_senators: true
     follow_representatives: true
 
 risk:
+  # sizing
   max_position_pct: 0.05            # no single position > 5% of equity
   max_gross_exposure: 0.80          # total long exposure cap
   max_positions: 20
-  daily_loss_kill_switch_pct: 0.03  # halt new buys if equity drops >3% intraday
-  per_trade_stop_loss_pct: 0.05     # exit if a position drops 5% from entry
+
+  # kill switch (day-start equity persists across restarts)
+  daily_loss_kill_switch_pct: 0.03
+
+  # volatility-scaled stop (replaces flat per_trade_stop_loss_pct)
+  stop_atr_mult: 2.5                # stop distance = N * ATR14, expressed as %
+  stop_min_pct: 0.04                # floor on stop distance
+  stop_max_pct: 0.12                # ceiling on stop distance
+
+  # trailing / chandelier lock — protect winners after they've run
+  trailing_activate_pct: 0.08       # arm once unrealized_pl >= 8%
+  trailing_giveback_pct: 0.04       # after arming, exit if pl drops this far from highwater
+
+  # post-stop-out cooldown to kill the whipsaw loop
+  cooldown_days: 3
+
+  # entry/exit hysteresis: enter high, exit at zero
+  entry_score_threshold: 0.35
+  exit_score_threshold: 0.0
+
+  # sector concentration caps (tech-focused)
+  sector_caps:
+    mega_cap_tech: 5
+    ai_infra: 4
+    semiconductors: 4
+    software: 6
+    cloud_infra: 4
+    cybersecurity: 3
+    crypto_miners: 2
+    other: 4
+
+  # overnight gap protection
+  gap_skip_pct: 0.05                # skip stops & buys on names that gapped this hard today
+
+  # earnings blackout
+  earnings_blackout_days: 3         # skip buys within N days of earnings
 
 schedule:
-  run_interval_minutes: 60   # how often the main loop runs during market hours
-  pre_market_buffer_min: 5   # wait this long after open before trading
-  flatten_before_close_min: 0  # 0 = hold overnight; set >0 to close positions before close
+  run_interval_minutes: 60
+  pre_market_buffer_min: 5
+  flatten_before_close_min: 0
 
 logging:
   level: INFO

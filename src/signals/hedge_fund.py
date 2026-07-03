@@ -258,11 +258,17 @@ def hedge_fund_decision(cfg: Config, df: pd.DataFrame, bundle: Any | None = None
         "ml": 0.15,
     }
 
+    # Only conviction votes count. Neutral analysts (|score| < 0.1) contribute
+    # nothing so a wall of shrugs can't dilute a strong signal.
     weighted_sum = 0.0
     total_weight = 0.0
     for vote in votes:
         weight = weights.get(vote.name, 0.0)
-        confidence = max(vote.confidence / 100.0, 0.20)
+        if weight <= 0.0:
+            continue
+        confidence = vote.confidence / 100.0
+        if confidence < 0.1:
+            continue
         weighted_sum += vote.score * weight * confidence
         total_weight += weight * confidence
 

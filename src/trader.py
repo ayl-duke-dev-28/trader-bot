@@ -3,13 +3,16 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
+import pandas as pd
 import yfinance as yf
 
 from src.broker.alpaca_client import AlpacaBroker
 from src.config import Config, ROOT, load_config
-from src.data.market_data import get_history_many
+from src.data.earnings import near_earnings, next_earnings_dates
+from src.data.market_data import get_history, get_history_many
 from src.data.universe import load_universe
 from src.politicians.tracker import politician_signals
 from src.risk.manager import RiskManager, TradeIntent
@@ -74,9 +77,14 @@ def _last_prices(symbols: list[str]) -> dict[str, float]:
     return out
 
 
-def compute_signals(cfg: Config, symbols: list[str]) -> dict[str, float]:
+def compute_signals(
+    cfg: Config,
+    symbols: list[str],
+    history: dict[str, pd.DataFrame] | None = None,
+) -> dict[str, float]:
     """Composite signal in [-1, 1] per symbol."""
-    history = get_history_many(cfg, symbols)
+    if history is None:
+        history = get_history_many(cfg, symbols)
     bundle = load_model(cfg) if cfg.get("strategies", "ml", "enabled", default=True) else None
     use_hedge_fund = bool(cfg.get("strategies", "hedge_fund", "enabled", default=False))
 
@@ -107,11 +115,40 @@ def compute_signals(cfg: Config, symbols: list[str]) -> dict[str, float]:
     return out
 
 
+def _history_for_all(cfg: Config, symbols: list[str], held_symbols: list[str]) -> dict[str, pd.DataFrame]:
+    """History for the universe, plus any held symbols not in the universe (needed for stop math)."""
+    hist = get_history_many(cfg, symbols)
+    for extra in held_symbols:
+        if extra not in hist:
+            df = get_history(cfg, extra)
+            if not df.empty:
+                hist[extra] = df
+    return hist
+
+
+def _apply_earnings_blackout(
+    cfg: Config,
+    intents: list[TradeIntent],
+) -> list[TradeIntent]:
+    buy_symbols = [i.symbol for i in intents if i.side == "buy"]
+    if not buy_symbols:
+        return intents
+    blackout_days = int(cfg.get("risk", "earnings_blackout_days", default=0))
+    if blackout_days <= 0:
+        return intents
+    next_dates = next_earnings_dates(cfg, buy_symbols)
+    blocked = {s for s in buy_symbols if near_earnings(next_dates, s, blackout_days)}
+    if not blocked:
+        return intents
+    for sym in blocked:
+        log.info("[SKIP] BUY %s: earnings within %d days", sym, blackout_days)
+    return [i for i in intents if not (i.side == "buy" and i.symbol in blocked)]
+
+
 def trade_once(cfg: Config) -> None:
     broker = AlpacaBroker(cfg)
     risk = RiskManager(cfg, broker)
-
-    risk.apply_stop_losses()
+    dry = bool(cfg.get("dry_run", default=False))
 
     if not broker.is_market_open():
         log.info("market closed; skipping")
@@ -119,17 +156,23 @@ def trade_once(cfg: Config) -> None:
 
     symbols = load_universe(cfg)
     log.info("evaluating %d symbols", len(symbols))
-    scores = compute_signals(cfg, symbols)
+    held_symbols = [p.symbol for p in broker.positions()]
+    history = _history_for_all(cfg, symbols, held_symbols)
+
+    risk.apply_stop_losses(history=history, dry_run=dry)
+
+    scores = compute_signals(cfg, symbols, history=history)
     prices = _last_prices(symbols)
-    intents = _consolidate_intents(risk.size_orders(scores, prices))
+    intents = _consolidate_intents(risk.size_orders(scores, prices, history=history))
+    intents = _apply_earnings_blackout(cfg, intents)
 
     if not intents:
         log.info("no trade intents this cycle")
         return
 
-    dry = bool(cfg.get("dry_run", default=False))
     allow_fractional = bool(cfg.get("execution", "fractional_shares", default=True))
     open_buy_symbols = set() if dry else broker.open_order_symbols(side="buy")
+
     for intent in intents:
         if intent.side == "buy" and intent.symbol in open_buy_symbols:
             log.info("[SKIP] BUY %s: open buy order already pending", intent.symbol)
@@ -145,7 +188,8 @@ def trade_once(cfg: Config) -> None:
             continue
         log.info(msg)
         if intent.side == "sell":
-            broker.close_position(intent.symbol)
+            if broker.close_position(intent.symbol):
+                risk.state.clear_symbol(intent.symbol)
         else:
             broker.submit_market_order(intent.symbol, qty, "buy")
 
@@ -154,11 +198,16 @@ def run_loop(cfg: Config) -> None:
     interval_min = int(cfg.get("schedule", "run_interval_minutes", default=60))
     log.info("starting trader loop every %d minutes", interval_min)
     while True:
+        cycle_started = datetime.now()
         try:
             trade_once(cfg)
         except Exception:
             log.exception("trade cycle failed; continuing")
-        time.sleep(interval_min * 60)
+        elapsed = (datetime.now() - cycle_started).total_seconds()
+        sleep_seconds = max(0.0, interval_min * 60 - elapsed)
+        next_check = datetime.now() + timedelta(seconds=sleep_seconds)
+        log.info("next trade check scheduled for %s", next_check.strftime("%Y-%m-%d %H:%M:%S"))
+        time.sleep(sleep_seconds)
 
 
 if __name__ == "__main__":

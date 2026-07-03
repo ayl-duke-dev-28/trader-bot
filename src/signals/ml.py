@@ -17,6 +17,8 @@ from src.config import Config, ROOT
 
 log = logging.getLogger(__name__)
 
+DEFAULT_HORIZON_DAYS = 5
+
 FEATURES = [
     "ret_1", "ret_5", "ret_10", "ret_20",
     "vol_5", "vol_20",
@@ -52,13 +54,17 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def build_training_set(hist: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.Series]:
+def build_training_set(
+    hist: dict[str, pd.DataFrame],
+    horizon_days: int = DEFAULT_HORIZON_DAYS,
+) -> tuple[pd.DataFrame, pd.Series]:
+    """Target is P(close_{t+horizon} > close_t). Longer horizon has better signal-to-noise."""
     xs, ys = [], []
     for sym, df in hist.items():
-        if len(df) < 80:
+        if len(df) < 80 + horizon_days:
             continue
         feats = build_features(df)
-        target = (df["close"].shift(-1) > df["close"]).astype(int)
+        target = (df["close"].shift(-horizon_days) > df["close"]).astype(int)
         joined = feats.join(target.rename("y")).dropna()
         if joined.empty:
             continue
@@ -69,8 +75,12 @@ def build_training_set(hist: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.
     return pd.concat(xs), pd.concat(ys)
 
 
-def train_model(hist: dict[str, pd.DataFrame], model_path: Path) -> XGBClassifier | None:
-    X, y = build_training_set(hist)
+def train_model(
+    hist: dict[str, pd.DataFrame],
+    model_path: Path,
+    horizon_days: int = DEFAULT_HORIZON_DAYS,
+) -> XGBClassifier | None:
+    X, y = build_training_set(hist, horizon_days=horizon_days)
     if X.empty:
         log.error("no training data assembled")
         return None
@@ -96,8 +106,11 @@ def train_model(hist: dict[str, pd.DataFrame], model_path: Path) -> XGBClassifie
         log.info("ML holdout accuracy: %.3f on n=%d", acc, len(X_te))
 
     model_path.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump({"model": model, "features": FEATURES}, model_path)
-    log.info("saved model -> %s", model_path)
+    joblib.dump(
+        {"model": model, "features": FEATURES, "horizon_days": horizon_days},
+        model_path,
+    )
+    log.info("saved model -> %s (horizon=%d days)", model_path, horizon_days)
     return model
 
 
