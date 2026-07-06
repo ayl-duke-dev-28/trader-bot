@@ -25,6 +25,7 @@ from src.config import Config, ROOT
 from src.data.sectors import sector_for
 from src.risk.indicators import gap_pct, latest_atr_pct
 from src.risk.state import RiskState
+from src.trade_log import TradeLogEntry, TradeLogger
 
 log = logging.getLogger(__name__)
 
@@ -52,10 +53,12 @@ class RiskManager:
         cfg: Config,
         broker: AlpacaBroker,
         state: RiskState | None = None,
+        trade_log: TradeLogger | None = None,
     ):
         self.cfg = cfg
         self.broker = broker
         self.state = state or RiskState(_default_state_path(cfg))
+        self.trade_log = trade_log
 
     def _r(self, *keys, default):
         return self.cfg.get("risk", *keys, default=default)
@@ -83,6 +86,7 @@ class RiskManager:
         self,
         history: dict[str, pd.DataFrame] | None = None,
         dry_run: bool = False,
+        mode: str = "paper",
     ) -> None:
         history = history or {}
         stop_min = float(self._r("stop_min_pct", default=0.04))
@@ -103,7 +107,7 @@ class RiskManager:
                 trailing_floor = highwater - trailing_giveback
                 if p.unrealized_plpc <= trailing_floor:
                     self._close(
-                        p, dry_run, cooldown_days,
+                        p, dry_run, cooldown_days, mode=mode,
                         reason=f"trailing lock hw={highwater:.2%} now={p.unrealized_plpc:.2%}",
                     )
                     continue
@@ -119,7 +123,7 @@ class RiskManager:
 
             if p.unrealized_plpc <= -stop_pct:
                 self._close(
-                    p, dry_run, cooldown_days,
+                    p, dry_run, cooldown_days, mode=mode,
                     reason=f"stop pl={p.unrealized_plpc:.2%} vs -{stop_pct:.2%}",
                 )
 
@@ -135,13 +139,32 @@ class RiskManager:
             return stop_min
         return max(stop_min, min(stop_max, atr_p * atr_mult))
 
-    def _close(self, p: Position, dry_run: bool, cooldown_days: int, reason: str) -> None:
+    def _close(
+        self,
+        p: Position,
+        dry_run: bool,
+        cooldown_days: int,
+        reason: str,
+        mode: str = "paper",
+    ) -> None:
         log.warning("closing %s: %s", p.symbol, reason)
         if dry_run:
             log.info("[DRY] would close %s", p.symbol)
+            if self.trade_log is not None:
+                self.trade_log.log(TradeLogEntry(
+                    action="DRY", symbol=p.symbol, mode=mode, qty=p.qty,
+                    target_dollars=p.market_value, reason=f"stop-loss close; {reason}",
+                ))
             return
-        if self.broker.close_position(p.symbol):
+        closed = self.broker.close_position(p.symbol)
+        if closed:
             self.state.record_stop(p.symbol, cooldown_days)
+        if self.trade_log is not None:
+            self.trade_log.log(TradeLogEntry(
+                action="STOP" if closed else "FAIL",
+                symbol=p.symbol, mode=mode, qty=p.qty,
+                target_dollars=p.market_value, reason=reason,
+            ))
 
     # --- sizing -----------------------------------------------------------
 

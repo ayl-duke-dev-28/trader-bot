@@ -1,12 +1,12 @@
 """Sector classification for the tech-focused universe.
 
 Bucket names must match keys under `risk.sector_caps` in config.yaml.
-Names not listed fall through to `other`.
+Symbols not listed fall through to `other`.
 """
 from __future__ import annotations
 
 SECTOR_MAP: dict[str, str] = {
-    # Mega-cap tech: move with QQQ / broad market.
+    # Mega-cap tech — moves with QQQ / broad market.
     "AAPL": "mega_cap_tech",
     "MSFT": "mega_cap_tech",
     "GOOGL": "mega_cap_tech",
@@ -15,6 +15,7 @@ SECTOR_MAP: dict[str, str] = {
     "META": "mega_cap_tech",
     "TSLA": "mega_cap_tech",
     "NVDA": "mega_cap_tech",
+
     # AI / accelerated compute infra.
     "AMD": "ai_infra",
     "AVGO": "ai_infra",
@@ -24,6 +25,15 @@ SECTOR_MAP: dict[str, str] = {
     "DELL": "ai_infra",
     "ANET": "ai_infra",
     "VRT": "ai_infra",
+    "CRDO": "ai_infra",
+    "ALAB": "ai_infra",
+    "NBIS": "ai_infra",
+    "APLD": "ai_infra",
+    "PSTG": "ai_infra",
+    "BE": "ai_infra",
+    "AI": "ai_infra",
+    "SOUN": "ai_infra",
+
     # Broader semis — more cyclical, higher beta.
     "INTC": "semiconductors",
     "QCOM": "semiconductors",
@@ -48,6 +58,23 @@ SECTOR_MAP: dict[str, str] = {
     "MPWR": "semiconductors",
     "ENTG": "semiconductors",
     "TER": "semiconductors",
+    "WOLF": "semiconductors",
+    "ALGM": "semiconductors",
+    "POWI": "semiconductors",
+    "SLAB": "semiconductors",
+    "LSCC": "semiconductors",
+    "QRVO": "semiconductors",
+    "CRUS": "semiconductors",
+    "MKSI": "semiconductors",
+    "ACLS": "semiconductors",
+    "ONTO": "semiconductors",
+    "FORM": "semiconductors",
+    "ICHR": "semiconductors",
+    "CEVA": "semiconductors",
+    "RMBS": "semiconductors",
+    "IPGP": "semiconductors",
+    "LITE": "semiconductors",
+
     # Software / SaaS.
     "CRM": "software",
     "ADBE": "software",
@@ -60,12 +87,29 @@ SECTOR_MAP: dict[str, str] = {
     "CDNS": "software",
     "TEAM": "software",
     "SHOP": "software",
-    "XYZ": "software",
-    "PYPL": "software",
     "PLTR": "software",
     "U": "software",
     "APPS": "software",
-    # Cloud infra / data.
+    "HUBS": "software",
+    "ZM": "software",
+    "DOCU": "software",
+    "ASAN": "software",
+    "MNDY": "software",
+    "BILL": "software",
+    "FIVN": "software",
+    "TWLO": "software",
+    "ANSS": "software",
+    "VEEV": "software",
+    "APP": "software",
+    "RBLX": "software",
+    "DUOL": "software",
+    "PATH": "software",
+    "DBX": "software",
+    "JAMF": "software",
+    "FRSH": "software",
+    "WIX": "software",
+
+    # Cloud infra / data / storage.
     "NET": "cloud_infra",
     "SNOW": "cloud_infra",
     "DDOG": "cloud_infra",
@@ -74,6 +118,14 @@ SECTOR_MAP: dict[str, str] = {
     "EQIX": "cloud_infra",
     "DLR": "cloud_infra",
     "AKAM": "cloud_infra",
+    "BOX": "cloud_infra",
+    "NTNX": "cloud_infra",
+    "IOT": "cloud_infra",
+    "NTAP": "cloud_infra",
+    "STX": "cloud_infra",
+    "WDC": "cloud_infra",
+    "FFIV": "cloud_infra",
+
     # Cybersecurity.
     "CRWD": "cybersecurity",
     "PANW": "cybersecurity",
@@ -81,6 +133,13 @@ SECTOR_MAP: dict[str, str] = {
     "S": "cybersecurity",
     "OKTA": "cybersecurity",
     "FTNT": "cybersecurity",
+    "CHKP": "cybersecurity",
+    "CYBR": "cybersecurity",
+    "RBRK": "cybersecurity",
+    "QLYS": "cybersecurity",
+    "TENB": "cybersecurity",
+    "VRNS": "cybersecurity",
+
     # Crypto-adjacent — heavily BTC-correlated, high vol.
     "MSTR": "crypto_miners",
     "COIN": "crypto_miners",
@@ -91,21 +150,130 @@ SECTOR_MAP: dict[str, str] = {
     "HUT": "crypto_miners",
     "WULF": "crypto_miners",
     "IREN": "crypto_miners",
-    # Networking / hardware.
+    "HIVE": "crypto_miners",
+    "CAN": "crypto_miners",
+    "BTBT": "crypto_miners",
+    "BTDR": "crypto_miners",
+    "CORZ": "crypto_miners",
+
+    # Fintech rails / payments / neo-banks.
+    "V": "fintech",
+    "MA": "fintech",
+    "PYPL": "fintech",
+    "XYZ": "fintech",
+    "AXP": "fintech",
+    "FIS": "fintech",
+    "FI": "fintech",
+    "GPN": "fintech",
+    "UPST": "fintech",
+    "FLYW": "fintech",
+    "TOST": "fintech",
+    "NU": "fintech",
+    "SOFI": "fintech",
+    "HOOD": "fintech",
+    "AFRM": "fintech",
+
+    # China tech ADRs — driven by China risk more than US tech tape.
+    "BABA": "china_tech",
+    "PDD": "china_tech",
+    "JD": "china_tech",
+    "BIDU": "china_tech",
+    "NTES": "china_tech",
+
+    # EV / mobility / lidar / battery.
+    "RIVN": "ev_mobility",
+    "LCID": "ev_mobility",
+    "NIO": "ev_mobility",
+    "XPEV": "ev_mobility",
+    "LI": "ev_mobility",
+    "CHPT": "ev_mobility",
+    "LAZR": "ev_mobility",
+    "OUST": "ev_mobility",
+    "MBLY": "ev_mobility",
+    "QS": "ev_mobility",
+
+    # Space / defense tech / eVTOL / drones.
+    "RKLB": "space_defense",
+    "ASTS": "space_defense",
+    "IRDM": "space_defense",
+    "LUNR": "space_defense",
+    "ACHR": "space_defense",
+    "JOBY": "space_defense",
+    "BKSY": "space_defense",
+    "PL": "space_defense",
+    "AVAV": "space_defense",
+    "KTOS": "space_defense",
+
+    # Quantum computing pure-plays — very high vol.
+    "IONQ": "quantum",
+    "RGTI": "quantum",
+    "QBTS": "quantum",
+    "QUBT": "quantum",
+    "ARQQ": "quantum",
+
+    # Robotics / industrial automation.
+    "ISRG": "robotics",
+    "IRBT": "robotics",
+    "ROK": "robotics",
+    "SYM": "robotics",
+
+    # Adtech.
+    "TTD": "adtech",
+    "MGNI": "adtech",
+    "PUBM": "adtech",
+    "DV": "adtech",
+    "IAS": "adtech",
+
+    # Data-center / tower REITs.
+    "IRM": "data_centers",
+    "AMT": "data_centers",
+    "CCI": "data_centers",
+    "SBAC": "data_centers",
+
+    # Tech ETFs — treat as its own bucket so a basket-buy doesn't stack on top
+    # of single-name concentration in the same theme.
+    "QQQ": "etf_tech",
+    "SMH": "etf_tech",
+    "SOXX": "etf_tech",
+    "XLK": "etf_tech",
+    "VGT": "etf_tech",
+    "IGV": "etf_tech",
+    "CIBR": "etf_tech",
+    "SKYY": "etf_tech",
+    "WCLD": "etf_tech",
+    "BOTZ": "etf_tech",
+    "ARKK": "etf_tech",
+    "ARKQ": "etf_tech",
+    "QTUM": "etf_tech",
+    "FDN": "etf_tech",
+    "BLOK": "etf_tech",
+    "KWEB": "etf_tech",
+    "IYW": "etf_tech",
+
+    # Networking / hardware / EMS / industrial-tech / consumer-internet.
     "CSCO": "other",
     "HPE": "other",
     "JBL": "other",
     "IBM": "other",
-    # Streaming / consumer internet.
+    "CIEN": "other",
+    "FN": "other",
+    "FLEX": "other",
+    "ROP": "other",
+    "LOGI": "other",
     "NFLX": "other",
     "SPOT": "other",
     "UBER": "other",
     "ABNB": "other",
     "DASH": "other",
     "ROKU": "other",
-    # Fintech rails.
-    "V": "other",
-    "MA": "other",
+    "LYFT": "other",
+    "DIS": "other",
+    "EA": "other",
+    "TTWO": "other",
+    "ETSY": "other",
+    "EBAY": "other",
+    "MELI": "other",
+    "SE": "other",
 }
 
 

@@ -11,7 +11,7 @@ universe:
   # Source: which set of tickers to trade
   source: file
   file_path: src/data/tech_universe.txt
-  max_symbols: 120     # curated tech list; keep small for quality over breadth
+  max_symbols: 250     # curated tech list across every sector of the industry
 
 data:
   history_days: 400    # how much daily history to pull per symbol
@@ -63,6 +63,7 @@ risk:
   exit_score_threshold: 0.0
 
   # sector concentration caps (tech-focused)
+  # Tighter caps on high-vol / correlated buckets (crypto, quantum, EV, space).
   sector_caps:
     mega_cap_tech: 5
     ai_infra: 4
@@ -71,6 +72,15 @@ risk:
     cloud_infra: 4
     cybersecurity: 3
     crypto_miners: 2
+    fintech: 3
+    china_tech: 2
+    ev_mobility: 3
+    space_defense: 3
+    quantum: 2
+    robotics: 2
+    adtech: 2
+    data_centers: 2
+    etf_tech: 3
     other: 4
 
   # overnight gap protection
@@ -87,3 +97,4 @@ schedule:
 logging:
   level: INFO
   file: logs/trader.log
+  trades_file: logs/trades.xlsx   # per-activity Excel log (buy/sell/stop/skip)

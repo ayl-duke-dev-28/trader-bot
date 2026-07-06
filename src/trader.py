@@ -19,6 +19,7 @@ from src.risk.manager import RiskManager, TradeIntent
 from src.signals.classical import classical_signal
 from src.signals.hedge_fund import hedge_fund_decision
 from src.signals.ml import load_model, ml_signal
+from src.trade_log import TradeLogEntry, TradeLogger, trade_logger_from_config
 
 log = logging.getLogger(__name__)
 
@@ -147,8 +148,10 @@ def _apply_earnings_blackout(
 
 def trade_once(cfg: Config) -> None:
     broker = AlpacaBroker(cfg)
-    risk = RiskManager(cfg, broker)
+    trade_log = trade_logger_from_config(cfg)
+    risk = RiskManager(cfg, broker, trade_log=trade_log)
     dry = bool(cfg.get("dry_run", default=False))
+    mode = "dry" if dry else ("live" if cfg.is_live else "paper")
 
     if not broker.is_market_open():
         log.info("market closed; skipping")
@@ -159,7 +162,7 @@ def trade_once(cfg: Config) -> None:
     held_symbols = [p.symbol for p in broker.positions()]
     history = _history_for_all(cfg, symbols, held_symbols)
 
-    risk.apply_stop_losses(history=history, dry_run=dry)
+    risk.apply_stop_losses(history=history, dry_run=dry, mode=mode)
 
     scores = compute_signals(cfg, symbols, history=history)
     prices = _last_prices(symbols)
@@ -174,24 +177,52 @@ def trade_once(cfg: Config) -> None:
     open_buy_symbols = set() if dry else broker.open_order_symbols(side="buy")
 
     for intent in intents:
+        score = scores.get(intent.symbol)
         if intent.side == "buy" and intent.symbol in open_buy_symbols:
             log.info("[SKIP] BUY %s: open buy order already pending", intent.symbol)
+            trade_log.log(TradeLogEntry(
+                action="SKIP", symbol=intent.symbol, mode=mode,
+                target_dollars=intent.target_dollars, score=score,
+                reason=f"buy already pending; {intent.reason}",
+            ))
             continue
         price = prices.get(intent.symbol, 0.0)
         qty = RiskManager.intent_to_qty(intent, price, allow_fractional=allow_fractional)
         msg = f"{intent.side.upper()} {intent.symbol} ~${intent.target_dollars:.0f} qty={qty} ({intent.reason})"
         if dry:
             log.info("[DRY] %s", msg)
+            trade_log.log(TradeLogEntry(
+                action="DRY", symbol=intent.symbol, mode=mode, qty=qty, price=price,
+                target_dollars=intent.target_dollars, score=score,
+                reason=f"{intent.side} intent; {intent.reason}",
+            ))
             continue
         if qty <= 0:
             log.info("[SKIP] %s", msg)
+            trade_log.log(TradeLogEntry(
+                action="SKIP", symbol=intent.symbol, mode=mode, qty=qty, price=price,
+                target_dollars=intent.target_dollars, score=score,
+                reason=f"qty<=0; {intent.reason}",
+            ))
             continue
         log.info(msg)
         if intent.side == "sell":
-            if broker.close_position(intent.symbol):
+            closed = broker.close_position(intent.symbol)
+            if closed:
                 risk.state.clear_symbol(intent.symbol)
+            trade_log.log(TradeLogEntry(
+                action="SELL" if closed else "FAIL",
+                symbol=intent.symbol, mode=mode, qty=qty, price=price,
+                target_dollars=intent.target_dollars, score=score, reason=intent.reason,
+            ))
         else:
-            broker.submit_market_order(intent.symbol, qty, "buy")
+            order_id = broker.submit_market_order(intent.symbol, qty, "buy")
+            trade_log.log(TradeLogEntry(
+                action="BUY" if order_id else "FAIL",
+                symbol=intent.symbol, mode=mode, qty=qty, price=price,
+                target_dollars=intent.target_dollars, score=score, reason=intent.reason,
+                order_id=order_id or "",
+            ))
 
 
 def run_loop(cfg: Config) -> None:

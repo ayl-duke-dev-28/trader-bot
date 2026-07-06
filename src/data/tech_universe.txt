@@ -1,5 +1,5 @@
 # Curated tech-focused universe for the trader bot.
-# Only liquid US-listed tech names. Sector tags live in src/data/sectors.py.
+# Sector tags live in src/data/sectors.py; concentration caps live in config.yaml.
 # Lines starting with # are ignored.
 
 # --- Mega-cap tech ---
@@ -21,6 +21,14 @@ SMCI
 DELL
 ANET
 VRT
+CRDO
+ALAB
+NBIS
+APLD
+PSTG
+BE
+AI
+SOUN
 
 # --- Semiconductors ---
 INTC
@@ -46,6 +54,22 @@ GFS
 MPWR
 ENTG
 TER
+WOLF
+ALGM
+POWI
+SLAB
+LSCC
+QRVO
+CRUS
+MKSI
+ACLS
+ONTO
+FORM
+ICHR
+CEVA
+RMBS
+IPGP
+LITE
 
 # --- Software / SaaS ---
 CRM
@@ -59,11 +83,27 @@ SNPS
 CDNS
 TEAM
 SHOP
-XYZ
-PYPL
 PLTR
 U
 APPS
+HUBS
+ZM
+DOCU
+ASAN
+MNDY
+BILL
+FIVN
+TWLO
+ANSS
+VEEV
+APP
+RBLX
+DUOL
+PATH
+DBX
+JAMF
+FRSH
+WIX
 
 # --- Cloud infra / data ---
 NET
@@ -74,6 +114,13 @@ ESTC
 EQIX
 DLR
 AKAM
+BOX
+NTNX
+IOT
+NTAP
+STX
+WDC
+FFIV
 
 # --- Cybersecurity ---
 CRWD
@@ -82,8 +129,14 @@ ZS
 S
 OKTA
 FTNT
+CHKP
+CYBR
+RBRK
+QLYS
+TENB
+VRNS
 
-# --- Crypto-adjacent (high vol) ---
+# --- Crypto-adjacent (miners + exchanges, high vol) ---
 MSTR
 COIN
 MARA
@@ -93,21 +146,128 @@ CLSK
 HUT
 WULF
 IREN
+HIVE
+CAN
+BTBT
+BTDR
+CORZ
 
-# --- Networking / hardware ---
+# --- Fintech rails / payments / neo-banks ---
+V
+MA
+PYPL
+XYZ
+AXP
+FIS
+FI
+GPN
+UPST
+FLYW
+TOST
+NU
+SOFI
+HOOD
+AFRM
+
+# --- China tech ADRs ---
+BABA
+PDD
+JD
+BIDU
+NTES
+
+# --- EV / mobility / lidar / battery ---
+RIVN
+LCID
+NIO
+XPEV
+LI
+CHPT
+LAZR
+OUST
+MBLY
+QS
+
+# --- Space / defense tech / eVTOL / drones ---
+RKLB
+ASTS
+IRDM
+LUNR
+ACHR
+JOBY
+BKSY
+PL
+AVAV
+KTOS
+
+# --- Quantum computing ---
+IONQ
+RGTI
+QBTS
+QUBT
+ARQQ
+
+# --- Robotics / industrial automation ---
+ISRG
+IRBT
+ROK
+SYM
+
+# --- Adtech ---
+TTD
+MGNI
+PUBM
+DV
+IAS
+
+# --- Data-center / tower REITs ---
+IRM
+AMT
+CCI
+SBAC
+
+# --- Networking / hardware / EMS ---
 CSCO
 HPE
 JBL
 IBM
+CIEN
+FN
+FLEX
+ROP
+LOGI
 
-# --- Streaming / consumer internet ---
+# --- Streaming / gaming / consumer internet / ecom ---
 NFLX
 SPOT
 UBER
 ABNB
 DASH
 ROKU
+LYFT
+DIS
+EA
+TTWO
+ETSY
+EBAY
+MELI
+SE
 
-# --- Fintech rails ---
-V
-MA
+# --- Tech ETFs (broad tech / semis / cloud / cyber / robotics / crypto / China) ---
+QQQ
+SMH
+SOXX
+XLK
+VGT
+IGV
+CIBR
+SKYY
+WCLD
+BOTZ
+ARKK
+ARKQ
+QTUM
+FDN
+BLOK
+KWEB
+IYW
