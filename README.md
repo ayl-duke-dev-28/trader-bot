@@ -51,6 +51,17 @@ python scripts/run_paper.py
 
 (In Docker: prefix any of these with `docker compose run --rm trader`.)
 
+## Trade activity log
+
+Every buy, sell, stop-loss close, skip, and dry-run intent is appended to an Excel
+file so you can review *why* each trade was made after the fact.
+
+- Default path: `logs/trades.xlsx` (configurable via `logging.trades_file` in `config.yaml`).
+- Columns: `timestamp, mode, action, symbol, qty, price, target_dollars, score, reason, order_id`.
+- Actions: `BUY`, `SELL`, `STOP` (stop-loss / trailing lock), `SKIP`, `DRY`, `FAIL`.
+- The `reason` column carries the exact signal/sizing/stop trigger (e.g. `score=+0.42 sector=tech`, `stop pl=-6.20% vs -4.00%`).
+- The file is created on the first logged action — until then it won't exist on disk.
+
 ## Going live
 
 1. Add `ALPACA_LIVE_API_KEY` / `ALPACA_LIVE_API_SECRET` to `.env`.
