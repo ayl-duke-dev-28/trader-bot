@@ -26,12 +26,17 @@ def get_history(cfg: Config, symbol: str, days: int | None = None) -> pd.DataFra
     days = days or int(cfg.get("data", "history_days", default=400))
     path = _cache_path(cfg, symbol)
     today = datetime.utcnow().date()
+    required_start = today - timedelta(days=days)
 
     if path.exists():
         try:
             df = pd.read_parquet(path)
-            if not df.empty and df.index.max().date() >= today - timedelta(days=1):
-                return df.tail(days)
+            if (
+                not df.empty
+                and df.index.max().date() >= today - timedelta(days=1)
+                and df.index.min().date() <= required_start
+            ):
+                return df[df.index.date >= required_start]
         except Exception as e:
             log.warning("cache read failed for %s: %s", symbol, e)
 
@@ -60,13 +65,13 @@ def get_history(cfg: Config, symbol: str, days: int | None = None) -> pd.DataFra
         df.to_parquet(path)
     except Exception as e:
         log.warning("cache write failed for %s: %s", symbol, e)
-    return df.tail(days)
+    return df[df.index.date >= required_start]
 
 
-def get_history_many(cfg: Config, symbols: list[str]) -> dict[str, pd.DataFrame]:
+def get_history_many(cfg: Config, symbols: list[str], days: int | None = None) -> dict[str, pd.DataFrame]:
     out: dict[str, pd.DataFrame] = {}
     for s in symbols:
-        df = get_history(cfg, s)
+        df = get_history(cfg, s, days=days)
         if not df.empty:
             out[s] = df
     return out

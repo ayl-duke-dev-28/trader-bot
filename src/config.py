@@ -28,7 +28,7 @@ class Config:
         return node
 
 
-def load_config(path: str | Path = "config.yaml") -> Config:
+def load_config(path: str | Path = "config.yaml", require_secrets: bool = True) -> Config:
     load_dotenv(ROOT / ".env")
     cfg_path = Path(path)
     if not cfg_path.is_absolute():
@@ -42,7 +42,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
     if is_live:
         key = os.getenv("ALPACA_LIVE_API_KEY", "")
         secret = os.getenv("ALPACA_LIVE_API_SECRET", "")
-        if not key or not secret:
+        if require_secrets and (not key or not secret):
             raise RuntimeError(
                 "mode=live in config.yaml but ALPACA_LIVE_API_KEY/SECRET not set in .env. "
                 "Refusing to start."
@@ -50,7 +50,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
     else:
         key = os.getenv("ALPACA_API_KEY", "")
         secret = os.getenv("ALPACA_API_SECRET", "")
-        if not key or not secret:
+        if require_secrets and (not key or not secret):
             raise RuntimeError(
                 "ALPACA_API_KEY / ALPACA_API_SECRET missing in .env. "
                 "Get free paper keys at https://app.alpaca.markets/paper/dashboard/overview"
