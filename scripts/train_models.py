@@ -20,7 +20,8 @@ def main() -> int:
     cfg = load_config()
     symbols = load_universe(cfg)
     log.info("downloading history for %d symbols...", len(symbols))
-    hist = get_history_many(cfg, symbols)
+    train_days = int(cfg.get("data", "training_history_days", default=cfg.get("data", "history_days", default=400)))
+    hist = get_history_many(cfg, symbols, days=train_days)
     log.info("got history for %d symbols", len(hist))
 
     model_path = Path(cfg.get("strategies", "ml", "model_path", default="models/xgb_direction.joblib"))

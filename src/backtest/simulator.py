@@ -64,6 +64,32 @@ def _count_by_sector(symbols: list[str]) -> dict[str, int]:
     return counts
 
 
+def _regime_adjusted_max_gross_pct(
+    cfg: Config,
+    history: dict[str, pd.DataFrame],
+    date: pd.Timestamp,
+    normal_max_gross_pct: float,
+) -> float:
+    regime_cfg = _cfg_r(cfg, "market_regime", default={}) or {}
+    if not bool(regime_cfg.get("enabled", False)):
+        return normal_max_gross_pct
+
+    benchmark = str(regime_cfg.get("benchmark_symbol", "QQQ")).upper()
+    window = int(regime_cfg.get("sma_window", 200))
+    risk_off_max = float(regime_cfg.get("risk_off_max_gross_exposure", 0.0))
+    hist = history.get(benchmark)
+    if hist is None or hist.empty or "close" not in hist.columns:
+        return normal_max_gross_pct
+
+    close = hist.loc[:date]["close"].dropna()
+    if len(close) < window:
+        return normal_max_gross_pct
+    sma = close.rolling(window).mean().iloc[-1]
+    if sma != sma or close.iloc[-1] >= sma:
+        return normal_max_gross_pct
+    return min(normal_max_gross_pct, risk_off_max)
+
+
 def _score_snapshot(cfg: Config, history: dict[str, pd.DataFrame], bundle) -> dict[str, float]:
     """Match trader.compute_signals, but avoid reloading the ML bundle every date."""
     use_hedge_fund = bool(cfg.get("strategies", "hedge_fund", "enabled", default=False))
@@ -345,7 +371,8 @@ def simulate_current_bot(
             if price is not None:
                 held_value += pos.market_value(price)
         max_per_position = current_equity * max_pos_pct
-        remaining_gross = max(0.0, current_equity * max_gross_pct - held_value)
+        adjusted_max_gross_pct = _regime_adjusted_max_gross_pct(cfg, history, date, max_gross_pct)
+        remaining_gross = max(0.0, current_equity * adjusted_max_gross_pct - held_value)
         open_slots = max(0, max_positions - len(positions))
         sector_used = _count_by_sector(list(positions))
 

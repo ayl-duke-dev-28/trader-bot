@@ -59,7 +59,7 @@ def build_training_set(
     horizon_days: int = DEFAULT_HORIZON_DAYS,
 ) -> tuple[pd.DataFrame, pd.Series]:
     """Target is P(close_{t+horizon} > close_t). Longer horizon has better signal-to-noise."""
-    xs, ys = [], []
+    rows = []
     for sym, df in hist.items():
         if len(df) < 80 + horizon_days:
             continue
@@ -68,11 +68,12 @@ def build_training_set(
         joined = feats.join(target.rename("y")).dropna()
         if joined.empty:
             continue
-        xs.append(joined[FEATURES])
-        ys.append(joined["y"])
-    if not xs:
+        joined = joined.assign(_date=pd.to_datetime(joined.index), _symbol=sym)
+        rows.append(joined)
+    if not rows:
         return pd.DataFrame(), pd.Series(dtype=int)
-    return pd.concat(xs), pd.concat(ys)
+    data = pd.concat(rows).sort_values(["_date", "_symbol"])
+    return data[FEATURES], data["y"]
 
 
 def train_model(

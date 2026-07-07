@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.signals.classical import classical_signal
 from src.signals.hedge_fund import hedge_fund_decision
-from src.signals.ml import build_features
+from src.signals.ml import build_features, build_training_set
 from src.risk.manager import RiskManager, TradeIntent
 from src.trader import _consolidate_intents
 
@@ -44,6 +44,16 @@ def test_build_features_shape():
     assert "rsi_14" in feats.columns
 
 
+def test_training_set_is_chronological_across_symbols():
+    a = _fake_df()
+    b = _fake_df()
+    b.index = b.index + pd.Timedelta(days=30)
+    X, y = build_training_set({"BBB": b, "AAA": a}, horizon_days=5)
+    assert not X.empty
+    assert len(X) == len(y)
+    assert X.index.is_monotonic_increasing
+
+
 def test_hedge_fund_signal_in_range():
     class DummyConfig:
         def get(self, *keys, default=None):
@@ -73,10 +83,33 @@ def test_consolidate_duplicate_buy_intents():
     assert merged[0].target_dollars == 2_345.94
 
 
+def test_market_regime_reduces_gross_exposure():
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            if keys == ("risk", "market_regime"):
+                return {
+                    "enabled": True,
+                    "benchmark_symbol": "QQQ",
+                    "sma_window": 3,
+                    "risk_off_max_gross_exposure": 0.2,
+                }
+            return default
+
+    class DummyBroker:
+        pass
+
+    idx = pd.date_range("2024-01-01", periods=4, freq="B")
+    qqq = pd.DataFrame({"close": [100.0, 99.0, 98.0, 90.0]}, index=idx)
+    risk = RiskManager(DummyConfig(), DummyBroker(), state=object())
+    assert risk._regime_adjusted_max_gross_pct({"QQQ": qqq}, 0.8) == 0.2
+
+
 if __name__ == "__main__":
     test_classical_signal_in_range()
     test_build_features_shape()
+    test_training_set_is_chronological_across_symbols()
     test_hedge_fund_signal_in_range()
     test_intent_to_qty_whole_share_mode()
     test_consolidate_duplicate_buy_intents()
+    test_market_regime_reduces_gross_exposure()
     print("smoke tests OK")

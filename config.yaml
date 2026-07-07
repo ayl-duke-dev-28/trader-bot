@@ -15,6 +15,7 @@ universe:
 
 data:
   history_days: 400    # how much daily history to pull per symbol
+  training_history_days: 2100  # longer window for model training/backtests
   cache_dir: data_cache
 
 strategies:
@@ -40,8 +41,15 @@ strategies:
 risk:
   # sizing
   max_position_pct: 0.05            # no single position > 5% of equity
-  max_gross_exposure: 0.80          # total long exposure cap
+  max_gross_exposure: 0.80          # total long exposure cap in normal markets
   max_positions: 20
+
+  # market regime filter: avoid adding risk during broad tech downtrends
+  market_regime:
+    enabled: true
+    benchmark_symbol: QQQ
+    sma_window: 200
+    risk_off_max_gross_exposure: 0.20
 
   # kill switch (day-start equity persists across restarts)
   daily_loss_kill_switch_pct: 0.03
@@ -59,7 +67,7 @@ risk:
   cooldown_days: 3
 
   # entry/exit hysteresis: enter high, exit at zero
-  entry_score_threshold: 0.35
+  entry_score_threshold: 0.55
   exit_score_threshold: 0.0
 
   # sector concentration caps (tech-focused)

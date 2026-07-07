@@ -179,6 +179,7 @@ class RiskManager:
         equity = acct.equity
         max_pos_pct = float(self._r("max_position_pct", default=0.05))
         max_gross_pct = float(self._r("max_gross_exposure", default=0.80))
+        max_gross_pct = self._regime_adjusted_max_gross_pct(history, max_gross_pct)
         max_positions = int(self._r("max_positions", default=20))
         entry_thr = float(self._r("entry_score_threshold", default=0.35))
         exit_thr = float(self._r("exit_score_threshold", default=0.0))
@@ -263,6 +264,36 @@ class RiskManager:
             sector_used[sector] = sector_used.get(sector, 0) + 1
 
         return intents
+
+    def _regime_adjusted_max_gross_pct(
+        self,
+        history: dict[str, pd.DataFrame],
+        normal_max_gross_pct: float,
+    ) -> float:
+        regime_cfg = self._r("market_regime", default={}) or {}
+        if not bool(regime_cfg.get("enabled", False)):
+            return normal_max_gross_pct
+
+        benchmark = str(regime_cfg.get("benchmark_symbol", "QQQ")).upper()
+        window = int(regime_cfg.get("sma_window", 200))
+        risk_off_max = float(regime_cfg.get("risk_off_max_gross_exposure", 0.0))
+        hist = history.get(benchmark)
+        if hist is None or hist.empty or "close" not in hist.columns or len(hist) < window:
+            log.warning("market regime filter skipped: missing %d bars for %s", window, benchmark)
+            return normal_max_gross_pct
+
+        close = hist["close"].dropna()
+        sma = close.rolling(window).mean().iloc[-1]
+        last = close.iloc[-1]
+        if sma != sma or last >= sma:
+            return normal_max_gross_pct
+
+        adjusted = min(normal_max_gross_pct, risk_off_max)
+        log.info(
+            "risk-off regime: %s close %.2f < SMA%d %.2f; max gross %.0f%% -> %.0f%%",
+            benchmark, last, window, sma, normal_max_gross_pct * 100, adjusted * 100,
+        )
+        return adjusted
 
     # --- utils ------------------------------------------------------------
 
