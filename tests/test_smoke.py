@@ -104,6 +104,63 @@ def test_market_regime_reduces_gross_exposure():
     assert risk._regime_adjusted_max_gross_pct({"QQQ": qqq}, 0.8) == 0.2
 
 
+def test_benchmark_core_buy_targets_configured_sleeve():
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            if keys == ("risk", "benchmark_core"):
+                return {
+                    "enabled": True,
+                    "symbol": "QQQ",
+                    "risk_on_target_pct": 0.30,
+                    "risk_off_target_pct": 0.0,
+                    "min_trade_dollars": 500,
+                }
+            return default
+
+    class DummyBroker:
+        pass
+
+    risk = RiskManager(DummyConfig(), DummyBroker(), state=object())
+    intent = risk._benchmark_core_buy(
+        held_active={},
+        prices={"QQQ": 100.0},
+        equity=100_000.0,
+        remaining_gross=80_000.0,
+        max_gross_pct=0.8,
+        normal_max_gross_pct=0.8,
+        open_slots=1,
+    )
+    assert intent is not None
+    assert intent.symbol == "QQQ"
+    assert intent.target_dollars == 30_000.0
+
+
+def test_relative_strength_blocks_lagging_symbol():
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            if keys == ("risk", "relative_strength"):
+                return {
+                    "enabled": True,
+                    "benchmark_symbol": "QQQ",
+                    "lookback_days": 3,
+                    "min_excess_return": 0.0,
+                    "exempt_symbols": ["QQQ"],
+                }
+            return default
+
+    class DummyBroker:
+        pass
+
+    idx = pd.date_range("2024-01-01", periods=5, freq="B")
+    history = {
+        "AAPL": pd.DataFrame({"close": [100.0, 100.0, 100.0, 100.0, 101.0]}, index=idx),
+        "QQQ": pd.DataFrame({"close": [100.0, 100.0, 100.0, 100.0, 110.0]}, index=idx),
+    }
+    risk = RiskManager(DummyConfig(), DummyBroker(), state=object())
+    assert not risk._passes_relative_strength("AAPL", history)
+    assert risk._passes_relative_strength("QQQ", history)
+
+
 if __name__ == "__main__":
     test_classical_signal_in_range()
     test_build_features_shape()
@@ -112,4 +169,6 @@ if __name__ == "__main__":
     test_intent_to_qty_whole_share_mode()
     test_consolidate_duplicate_buy_intents()
     test_market_regime_reduces_gross_exposure()
+    test_benchmark_core_buy_targets_configured_sleeve()
+    test_relative_strength_blocks_lagging_symbol()
     print("smoke tests OK")

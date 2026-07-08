@@ -90,6 +90,69 @@ def _regime_adjusted_max_gross_pct(
     return min(normal_max_gross_pct, risk_off_max)
 
 
+def _benchmark_core_cfg(cfg: Config) -> dict:
+    return _cfg_r(cfg, "benchmark_core", default={}) or {}
+
+
+def _benchmark_core_symbol(cfg: Config) -> str:
+    return str(_benchmark_core_cfg(cfg).get("symbol", "QQQ")).upper()
+
+
+def _benchmark_core_target_pct(
+    cfg: Config,
+    max_gross_pct: float,
+    normal_max_gross_pct: float,
+) -> float:
+    core_cfg = _benchmark_core_cfg(cfg)
+    if not bool(core_cfg.get("enabled", False)):
+        return 0.0
+    risk_on = max_gross_pct >= normal_max_gross_pct - 1e-9
+    key = "risk_on_target_pct" if risk_on else "risk_off_target_pct"
+    return max(0.0, min(max_gross_pct, float(core_cfg.get(key, 0.0))))
+
+
+def _lookback_return_at(
+    history: dict[str, pd.DataFrame],
+    symbol: str,
+    date: pd.Timestamp,
+    lookback: int,
+) -> float | None:
+    hist = history.get(symbol)
+    if hist is None or hist.empty or "close" not in hist.columns:
+        return None
+    close = hist.loc[:date]["close"].dropna()
+    if len(close) <= lookback:
+        return None
+    start = close.iloc[-lookback - 1]
+    end = close.iloc[-1]
+    if start <= 0 or end <= 0:
+        return None
+    return float(end / start - 1.0)
+
+
+def _passes_relative_strength_at(
+    cfg: Config,
+    history: dict[str, pd.DataFrame],
+    symbol: str,
+    date: pd.Timestamp,
+) -> bool:
+    rel_cfg = _cfg_r(cfg, "relative_strength", default={}) or {}
+    if not bool(rel_cfg.get("enabled", False)):
+        return True
+    symbol = symbol.upper()
+    benchmark = str(rel_cfg.get("benchmark_symbol", "QQQ")).upper()
+    exempt = {str(s).upper() for s in rel_cfg.get("exempt_symbols", [])}
+    if symbol == benchmark or symbol in exempt:
+        return True
+    lookback = int(rel_cfg.get("lookback_days", 63))
+    min_excess = float(rel_cfg.get("min_excess_return", 0.0))
+    sym_ret = _lookback_return_at(history, symbol, date, lookback)
+    bench_ret = _lookback_return_at(history, benchmark, date, lookback)
+    if sym_ret is None or bench_ret is None:
+        return False
+    return sym_ret >= bench_ret + min_excess
+
+
 def _score_snapshot(cfg: Config, history: dict[str, pd.DataFrame], bundle) -> dict[str, float]:
     """Match trader.compute_signals, but avoid reloading the ML bundle every date."""
     use_hedge_fund = bool(cfg.get("strategies", "hedge_fund", "enabled", default=False))
@@ -352,6 +415,17 @@ def simulate_current_bot(
             }
             scores = _score_snapshot(cfg, prior_history, bundle)
 
+        adjusted_max_gross_pct = _regime_adjusted_max_gross_pct(cfg, history, date, max_gross_pct)
+        core_symbol = _benchmark_core_symbol(cfg)
+        core_target_pct = _benchmark_core_target_pct(cfg, adjusted_max_gross_pct, max_gross_pct)
+        if core_target_pct <= 0 and core_symbol in positions:
+            price = price_on(core_symbol, date)
+            if price is not None:
+                pos = positions.pop(core_symbol)
+                highwater.pop(core_symbol, None)
+                cash += pos.qty * price * (1.0 - cost_bps / 10_000.0)
+                log_trade(date, "SELL", core_symbol, pos.qty, price, scores.get(core_symbol), "benchmark core risk-off target=0")
+
         # Score exits, matching the live hysteresis rule.
         for sym, pos in list(positions.items()):
             score = float(scores.get(sym, 0.0))
@@ -371,10 +445,39 @@ def simulate_current_bot(
             if price is not None:
                 held_value += pos.market_value(price)
         max_per_position = current_equity * max_pos_pct
-        adjusted_max_gross_pct = _regime_adjusted_max_gross_pct(cfg, history, date, max_gross_pct)
         remaining_gross = max(0.0, current_equity * adjusted_max_gross_pct - held_value)
         open_slots = max(0, max_positions - len(positions))
         sector_used = _count_by_sector(list(positions))
+
+        core_cfg = _benchmark_core_cfg(cfg)
+        core_target_pct = _benchmark_core_target_pct(cfg, adjusted_max_gross_pct, max_gross_pct)
+        core_price = price_on(core_symbol, date)
+        if core_target_pct > 0 and core_price is not None and (core_symbol in positions or open_slots > 0):
+            existing = positions[core_symbol].market_value(core_price) if core_symbol in positions else 0.0
+            target = min(current_equity * core_target_pct, current_equity * adjusted_max_gross_pct)
+            delta = min(max(0.0, target - existing), remaining_gross)
+            min_trade = float(core_cfg.get("min_trade_dollars", 100.0))
+            if delta >= max(min_trade, core_price):
+                spendable = min(delta, cash / (1.0 + cost_bps / 10_000.0))
+                qty = spendable / core_price
+                if not allow_fractional:
+                    qty = float(np.floor(qty))
+                else:
+                    qty = round(qty, 4)
+                if qty > 0:
+                    cost = qty * core_price * (1.0 + cost_bps / 10_000.0)
+                    if cost <= cash + 1e-6:
+                        old_qty = positions[core_symbol].qty if core_symbol in positions else 0.0
+                        old_cost = old_qty * positions[core_symbol].avg_entry_price if core_symbol in positions else 0.0
+                        new_qty = old_qty + qty
+                        positions[core_symbol] = SimPosition(core_symbol, new_qty, (old_cost + qty * core_price) / new_qty)
+                        cash -= cost
+                        remaining_gross -= qty * core_price
+                        if old_qty == 0:
+                            open_slots -= 1
+                            sector = sector_for(core_symbol)
+                            sector_used[sector] = sector_used.get(sector, 0) + 1
+                        log_trade(date, "BUY", core_symbol, qty, core_price, scores.get(core_symbol), f"benchmark core target={core_target_pct:.0%}")
 
         candidates = sorted(
             ((sym, float(score)) for sym, score in scores.items() if float(score) >= entry_thr),
@@ -389,6 +492,8 @@ def simulate_current_bot(
             if price is None:
                 continue
             hist_today = history[sym].loc[:date]
+            if not _passes_relative_strength_at(cfg, history, sym, date):
+                continue
             if not hist_today.empty and abs(gap_pct(hist_today)) >= gap_skip_limit:
                 continue
             sector = sector_for(sym)

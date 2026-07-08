@@ -178,8 +178,8 @@ class RiskManager:
         acct = self.broker.account()
         equity = acct.equity
         max_pos_pct = float(self._r("max_position_pct", default=0.05))
-        max_gross_pct = float(self._r("max_gross_exposure", default=0.80))
-        max_gross_pct = self._regime_adjusted_max_gross_pct(history, max_gross_pct)
+        normal_max_gross_pct = float(self._r("max_gross_exposure", default=0.80))
+        max_gross_pct = self._regime_adjusted_max_gross_pct(history, normal_max_gross_pct)
         max_positions = int(self._r("max_positions", default=20))
         entry_thr = float(self._r("entry_score_threshold", default=0.35))
         exit_thr = float(self._r("exit_score_threshold", default=0.0))
@@ -204,6 +204,13 @@ class RiskManager:
                     )
                 )
 
+        self._apply_benchmark_core_sells(
+            intents=intents,
+            held=held,
+            max_gross_pct=max_gross_pct,
+            normal_max_gross_pct=normal_max_gross_pct,
+        )
+
         if self.kill_switch_tripped():
             log.warning("kill switch tripped; no new buys this cycle")
             return intents
@@ -215,6 +222,21 @@ class RiskManager:
         }
         sector_used = _count_by_sector(held_active.keys())
         open_slots = max(0, max_positions - len(held_active))
+
+        core_intent = self._benchmark_core_buy(
+            held_active=held_active,
+            prices=prices,
+            equity=equity,
+            remaining_gross=remaining_gross,
+            max_gross_pct=max_gross_pct,
+            normal_max_gross_pct=normal_max_gross_pct,
+            open_slots=open_slots,
+        )
+        if core_intent is not None:
+            intents.append(core_intent)
+            remaining_gross -= core_intent.target_dollars
+            if core_intent.symbol not in held_active:
+                open_slots -= 1
 
         candidates = sorted(
             ((s, sc) for s, sc in scores.items() if sc >= entry_thr),
@@ -229,6 +251,9 @@ class RiskManager:
                 continue
             price = prices.get(sym, 0.0)
             if price <= 0:
+                continue
+
+            if not self._passes_relative_strength(sym, history):
                 continue
 
             hist = history.get(sym)
@@ -264,6 +289,110 @@ class RiskManager:
             sector_used[sector] = sector_used.get(sector, 0) + 1
 
         return intents
+
+    def _benchmark_core_cfg(self) -> dict:
+        return self._r("benchmark_core", default={}) or {}
+
+    def _benchmark_core_symbol(self) -> str:
+        return str(self._benchmark_core_cfg().get("symbol", "QQQ")).upper()
+
+    def _benchmark_core_target_pct(
+        self,
+        max_gross_pct: float,
+        normal_max_gross_pct: float,
+    ) -> float:
+        core_cfg = self._benchmark_core_cfg()
+        if not bool(core_cfg.get("enabled", False)):
+            return 0.0
+        risk_on = max_gross_pct >= normal_max_gross_pct - 1e-9
+        key = "risk_on_target_pct" if risk_on else "risk_off_target_pct"
+        return max(0.0, min(max_gross_pct, float(core_cfg.get(key, 0.0))))
+
+    def _apply_benchmark_core_sells(
+        self,
+        intents: list[TradeIntent],
+        held: dict[str, Position],
+        max_gross_pct: float,
+        normal_max_gross_pct: float,
+    ) -> None:
+        core_cfg = self._benchmark_core_cfg()
+        if not bool(core_cfg.get("enabled", False)):
+            return
+        symbol = self._benchmark_core_symbol()
+        if symbol not in held:
+            return
+        target_pct = self._benchmark_core_target_pct(max_gross_pct, normal_max_gross_pct)
+        if target_pct > 0:
+            return
+        if any(i.symbol == symbol and i.side == "sell" for i in intents):
+            return
+        intents.append(TradeIntent(symbol, "sell", held[symbol].market_value, "benchmark core risk-off target=0"))
+
+    def _benchmark_core_buy(
+        self,
+        held_active: dict[str, Position],
+        prices: dict[str, float],
+        equity: float,
+        remaining_gross: float,
+        max_gross_pct: float,
+        normal_max_gross_pct: float,
+        open_slots: int,
+    ) -> TradeIntent | None:
+        core_cfg = self._benchmark_core_cfg()
+        if not bool(core_cfg.get("enabled", False)):
+            return None
+
+        symbol = self._benchmark_core_symbol()
+        target_pct = self._benchmark_core_target_pct(max_gross_pct, normal_max_gross_pct)
+        if target_pct <= 0:
+            return None
+        if symbol not in held_active and open_slots <= 0:
+            return None
+
+        price = prices.get(symbol, 0.0)
+        if price <= 0:
+            return None
+        existing = held_active[symbol].market_value if symbol in held_active else 0.0
+        target = min(equity * target_pct, equity * max_gross_pct)
+        delta = min(max(0.0, target - existing), remaining_gross)
+        min_trade = float(core_cfg.get("min_trade_dollars", MIN_TRADE_DOLLARS))
+        if delta < max(min_trade, price):
+            return None
+        return TradeIntent(symbol, "buy", delta, f"benchmark core target={target_pct:.0%}")
+
+    def _passes_relative_strength(
+        self,
+        symbol: str,
+        history: dict[str, pd.DataFrame],
+    ) -> bool:
+        rel_cfg = self._r("relative_strength", default={}) or {}
+        if not bool(rel_cfg.get("enabled", False)):
+            return True
+        symbol = symbol.upper()
+        benchmark = str(rel_cfg.get("benchmark_symbol", "QQQ")).upper()
+        exempt = {str(s).upper() for s in rel_cfg.get("exempt_symbols", [])}
+        if symbol == benchmark or symbol in exempt:
+            return True
+
+        lookback = int(rel_cfg.get("lookback_days", 63))
+        min_excess = float(rel_cfg.get("min_excess_return", 0.0))
+        hist = history.get(symbol)
+        bench_hist = history.get(benchmark)
+        if hist is None or bench_hist is None:
+            log.info("[SKIP] %s missing relative-strength history vs %s", symbol, benchmark)
+            return False
+        sym_ret = _lookback_return(hist, lookback)
+        bench_ret = _lookback_return(bench_hist, lookback)
+        if sym_ret is None or bench_ret is None:
+            log.info("[SKIP] %s insufficient relative-strength bars vs %s", symbol, benchmark)
+            return False
+        if sym_ret < bench_ret + min_excess:
+            log.info(
+                "[SKIP] %s relative strength %.2f%% < %s %.2f%% + %.2f%%",
+                symbol, sym_ret * 100, benchmark, bench_ret * 100, min_excess * 100,
+            )
+            return False
+        return True
 
     def _regime_adjusted_max_gross_pct(
         self,
@@ -313,3 +442,16 @@ def _count_by_sector(symbols: Iterable[str]) -> dict[str, int]:
         sec = sector_for(s)
         counts[sec] = counts.get(sec, 0) + 1
     return counts
+
+
+def _lookback_return(hist: pd.DataFrame, lookback: int) -> float | None:
+    if hist is None or hist.empty or "close" not in hist.columns:
+        return None
+    close = hist["close"].dropna()
+    if len(close) <= lookback:
+        return None
+    start = close.iloc[-lookback - 1]
+    end = close.iloc[-1]
+    if start <= 0 or end <= 0:
+        return None
+    return float(end / start - 1.0)

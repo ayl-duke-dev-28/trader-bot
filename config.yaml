@@ -51,6 +51,22 @@ risk:
     sma_window: 200
     risk_off_max_gross_exposure: 0.20
 
+  # benchmark-aware layer: keep a core QQQ sleeve in risk-on regimes and only
+  # add individual names that are outperforming that benchmark.
+  benchmark_core:
+    enabled: true
+    symbol: QQQ
+    risk_on_target_pct: 0.50
+    risk_off_target_pct: 0.0
+    min_trade_dollars: 500
+
+  relative_strength:
+    enabled: true
+    benchmark_symbol: QQQ
+    lookback_days: 63
+    min_excess_return: 0.0
+    exempt_symbols: [QQQ]
+
   # kill switch (day-start equity persists across restarts)
   daily_loss_kill_switch_pct: 0.03
 

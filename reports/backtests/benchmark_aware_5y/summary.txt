@@ -1,0 +1,16 @@
+start_date: 2021-07-08
+end_date: 2026-07-07
+start_capital: 100000.0000
+final_equity: 165185.9200
+total_return: 65.19%
+cagr: 10.57%
+sharpe: 0.8520
+max_drawdown: -20.32%
+trades: 1681
+buys: 907
+sells: 361
+stops: 413
+closed_win_rate: 64.99%
+open_positions: 10
+symbols: 228
+cost_bps: 5.0000
