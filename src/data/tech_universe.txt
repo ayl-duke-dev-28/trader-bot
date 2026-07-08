@@ -25,7 +25,6 @@ CRDO
 ALAB
 NBIS
 APLD
-PSTG
 BE
 AI
 SOUN
@@ -94,14 +93,12 @@ MNDY
 BILL
 FIVN
 TWLO
-ANSS
 VEEV
 APP
 RBLX
 DUOL
 PATH
 DBX
-JAMF
 FRSH
 WIX
 
@@ -130,7 +127,6 @@ S
 OKTA
 FTNT
 CHKP
-CYBR
 RBRK
 QLYS
 TENB
@@ -159,7 +155,6 @@ PYPL
 XYZ
 AXP
 FIS
-FI
 GPN
 UPST
 FLYW
@@ -209,7 +204,6 @@ ARQQ
 
 # --- Robotics / industrial automation ---
 ISRG
-IRBT
 ROK
 SYM
 
@@ -218,7 +212,6 @@ TTD
 MGNI
 PUBM
 DV
-IAS
 
 # --- Data-center / tower REITs ---
 IRM
