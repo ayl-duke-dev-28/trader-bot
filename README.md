@@ -51,6 +51,29 @@ python scripts/run_paper.py
 
 (In Docker: prefix any of these with `docker compose run --rm trader`.)
 
+## Trading schedule
+
+The live/paper loop uses fixed regular-session Eastern Time slots instead of
+running relative to process start time. By default it runs on weekdays at:
+
+```text
+09:30, 10:30, 11:30, 12:30, 13:30, 14:30, 15:30 ET
+```
+
+`15:30 ET` is the final cycle, 30 minutes before the normal `16:00 ET` close.
+The schedule is configurable in `config.yaml`:
+
+```yaml
+schedule:
+  market_timezone: America/New_York
+  first_run_et: "09:30"
+  last_run_et: "15:30"
+  run_interval_minutes: 60
+```
+
+Each scheduled cycle still checks Alpaca's market clock before trading, so
+holidays, weekends, and unexpected closures are skipped safely.
+
 ## Backtesting
 
 `python scripts/backtest.py` is the primary trust check. It does **not** use a
