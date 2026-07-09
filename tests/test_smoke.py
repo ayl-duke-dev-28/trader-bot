@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -14,7 +16,7 @@ from src.signals.hedge_fund import hedge_fund_decision
 from src.signals.ml import build_features, build_training_set
 from src.backtest.engine import backtest
 from src.risk.manager import RiskManager, TradeIntent
-from src.trader import _consolidate_intents
+from src.trader import _consolidate_intents, _next_scheduled_run
 
 
 def _fake_df(n: int = 200) -> pd.DataFrame:
@@ -242,6 +244,15 @@ def test_backtest_uses_live_path_benchmark_core():
     assert blocked.summary["buys"] == 0
 
 
+def test_next_scheduled_run_uses_market_hours_et():
+    tz = ZoneInfo("America/New_York")
+    assert _next_scheduled_run(datetime(2026, 7, 9, 8, 0, tzinfo=tz)) == datetime(2026, 7, 9, 9, 30, tzinfo=tz)
+    assert _next_scheduled_run(datetime(2026, 7, 9, 9, 31, tzinfo=tz)) == datetime(2026, 7, 9, 10, 30, tzinfo=tz)
+    assert _next_scheduled_run(datetime(2026, 7, 9, 15, 30, tzinfo=tz)) == datetime(2026, 7, 9, 15, 30, tzinfo=tz)
+    assert _next_scheduled_run(datetime(2026, 7, 9, 15, 31, tzinfo=tz)) == datetime(2026, 7, 10, 9, 30, tzinfo=tz)
+    assert _next_scheduled_run(datetime(2026, 7, 10, 16, 0, tzinfo=tz)) == datetime(2026, 7, 13, 9, 30, tzinfo=tz)
+
+
 if __name__ == "__main__":
     test_classical_signal_in_range()
     test_build_features_shape()
@@ -253,4 +264,5 @@ if __name__ == "__main__":
     test_benchmark_core_buy_targets_configured_sleeve()
     test_relative_strength_blocks_lagging_symbol()
     test_backtest_uses_live_path_benchmark_core()
+    test_next_scheduled_run_uses_market_hours_et()
     print("smoke tests OK")

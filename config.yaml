@@ -114,9 +114,10 @@ risk:
   earnings_blackout_days: 3         # skip buys within N days of earnings
 
 schedule:
-  run_interval_minutes: 60
-  pre_market_buffer_min: 5
-  flatten_before_close_min: 0
+  market_timezone: America/New_York
+  first_run_et: "09:30"       # first cycle at regular market open
+  last_run_et: "15:30"        # final cycle 30 minutes before the 4:00pm ET close
+  run_interval_minutes: 60    # 09:30, 10:30, ..., 15:30 ET on weekdays
 
 logging:
   level: INFO

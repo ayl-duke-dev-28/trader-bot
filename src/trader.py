@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, time as dt_time, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
@@ -22,6 +23,8 @@ from src.signals.ml import load_model, ml_signal
 from src.trade_log import TradeLogEntry, TradeLogger, trade_logger_from_config
 
 log = logging.getLogger(__name__)
+
+DEFAULT_MARKET_TZ = "America/New_York"
 
 
 def _consolidate_intents(intents: list[TradeIntent]) -> list[TradeIntent]:
@@ -225,20 +228,76 @@ def trade_once(cfg: Config) -> None:
             ))
 
 
+def _parse_hhmm(value: str) -> dt_time:
+    hour, minute = str(value).split(":", 1)
+    return dt_time(hour=int(hour), minute=int(minute))
+
+
+def _daily_run_times(start: str, end: str, interval_min: int) -> list[dt_time]:
+    start_t = _parse_hhmm(start)
+    end_t = _parse_hhmm(end)
+    base = datetime(2000, 1, 1, start_t.hour, start_t.minute)
+    end_dt = datetime(2000, 1, 1, end_t.hour, end_t.minute)
+    out: list[dt_time] = []
+    current = base
+    while current <= end_dt:
+        out.append(current.time())
+        current += timedelta(minutes=interval_min)
+    return out
+
+
+def _next_scheduled_run(
+    now: datetime,
+    *,
+    start: str = "09:30",
+    end: str = "15:30",
+    interval_min: int = 60,
+    tz_name: str = DEFAULT_MARKET_TZ,
+) -> datetime:
+    """Return the next weekday scheduled run time in market timezone."""
+    market_tz = ZoneInfo(tz_name)
+    local_now = now.replace(tzinfo=market_tz) if now.tzinfo is None else now.astimezone(market_tz)
+    run_times = _daily_run_times(start, end, interval_min)
+
+    day = local_now.date()
+    for offset in range(8):
+        candidate_day = day + timedelta(days=offset)
+        if candidate_day.weekday() >= 5:
+            continue
+        for run_time in run_times:
+            candidate = datetime.combine(candidate_day, run_time, tzinfo=market_tz)
+            if candidate >= local_now:
+                return candidate
+    raise RuntimeError("could not compute next scheduled run")
+
+
 def run_loop(cfg: Config) -> None:
     interval_min = int(cfg.get("schedule", "run_interval_minutes", default=60))
-    log.info("starting trader loop every %d minutes", interval_min)
+    first_run = str(cfg.get("schedule", "first_run_et", default="09:30"))
+    last_run = str(cfg.get("schedule", "last_run_et", default="15:30"))
+    tz_name = str(cfg.get("schedule", "market_timezone", default=DEFAULT_MARKET_TZ))
+    log.info(
+        "starting trader loop on %s weekdays from %s to %s every %d minutes",
+        tz_name,
+        first_run,
+        last_run,
+        interval_min,
+    )
     while True:
-        cycle_started = datetime.now()
+        next_run = _next_scheduled_run(
+            datetime.now(ZoneInfo(tz_name)),
+            start=first_run,
+            end=last_run,
+            interval_min=interval_min,
+            tz_name=tz_name,
+        )
+        sleep_seconds = max(0.0, (next_run - datetime.now(ZoneInfo(tz_name))).total_seconds())
+        log.info("next trade check scheduled for %s", next_run.strftime("%Y-%m-%d %H:%M:%S %Z"))
+        time.sleep(sleep_seconds)
         try:
             trade_once(cfg)
         except Exception:
             log.exception("trade cycle failed; continuing")
-        elapsed = (datetime.now() - cycle_started).total_seconds()
-        sleep_seconds = max(0.0, interval_min * 60 - elapsed)
-        next_check = datetime.now() + timedelta(seconds=sleep_seconds)
-        log.info("next trade check scheduled for %s", next_check.strftime("%Y-%m-%d %H:%M:%S"))
-        time.sleep(sleep_seconds)
 
 
 if __name__ == "__main__":
