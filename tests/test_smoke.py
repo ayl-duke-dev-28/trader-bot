@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.signals.classical import classical_signal
 from src.signals.hedge_fund import hedge_fund_decision
 from src.signals.ml import build_features, build_training_set
+from src.backtest.engine import backtest
 from src.risk.manager import RiskManager, TradeIntent
 from src.trader import _consolidate_intents
 
@@ -48,10 +49,12 @@ def test_training_set_is_chronological_across_symbols():
     a = _fake_df()
     b = _fake_df()
     b.index = b.index + pd.Timedelta(days=30)
-    X, y = build_training_set({"BBB": b, "AAA": a}, horizon_days=5)
+    horizon_days = 5
+    X, y = build_training_set({"BBB": b, "AAA": a}, horizon_days=horizon_days)
     assert not X.empty
     assert len(X) == len(y)
     assert X.index.is_monotonic_increasing
+    assert X.index.max() <= b.index[-horizon_days - 1]
 
 
 def test_hedge_fund_signal_in_range():
@@ -161,6 +164,84 @@ def test_relative_strength_blocks_lagging_symbol():
     assert risk._passes_relative_strength("QQQ", history)
 
 
+def test_backtest_uses_live_path_benchmark_core():
+    class DummyConfig:
+        is_live = False
+
+        def get(self, *keys, default=None):
+            values = {
+                ("execution", "fractional_shares"): True,
+                ("strategies", "hedge_fund", "enabled"): False,
+                ("strategies", "classical", "enabled"): False,
+                ("strategies", "classical", "weight"): 0.0,
+                ("strategies", "ml", "enabled"): False,
+                ("strategies", "ml", "weight"): 0.0,
+                ("strategies", "politicians", "enabled"): False,
+                ("risk", "max_position_pct"): 0.05,
+                ("risk", "max_gross_exposure"): 0.80,
+                ("risk", "max_positions"): 20,
+                ("risk", "entry_score_threshold"): 0.99,
+                ("risk", "exit_score_threshold"): -2.0,
+                ("risk", "gap_skip_pct"): 0.99,
+                ("risk", "cooldown_days"): 3,
+                ("risk", "trailing_activate_pct"): 10.0,
+                ("risk", "trailing_giveback_pct"): 1.0,
+                ("risk", "earnings_blackout_days"): 3,
+                ("risk", "stop_atr_mult"): 100.0,
+                ("risk", "stop_min_pct"): 0.99,
+                ("risk", "stop_max_pct"): 0.99,
+                ("risk", "sector_caps"): {"etf_tech": 3, "other": 3},
+                ("risk", "market_regime"): {"enabled": False},
+                ("risk", "benchmark_core"): {
+                    "enabled": True,
+                    "symbol": "QQQ",
+                    "risk_on_target_pct": 0.50,
+                    "risk_off_target_pct": 0.0,
+                    "min_trade_dollars": 100,
+                },
+                ("risk", "relative_strength"): {"enabled": False},
+                ("data", "history_days"): 40,
+                ("backtest", "warmup_days"): 0,
+            }
+            return values.get(keys, default)
+
+    idx = pd.date_range("2024-01-01", periods=80, freq="B")
+    qqq = pd.DataFrame(
+        {
+            "open": np.linspace(100.0, 120.0, len(idx)),
+            "high": np.linspace(101.0, 121.0, len(idx)),
+            "low": np.linspace(99.0, 119.0, len(idx)),
+            "close": np.linspace(100.0, 120.0, len(idx)),
+            "volume": 1_000_000,
+        },
+        index=idx,
+    )
+
+    result = backtest(
+        DummyConfig(),
+        {"QQQ": qqq},
+        start_date=idx[60],
+        start_capital=100_000.0,
+        cost_bps=0.0,
+    )
+
+    assert result.summary is not None
+    assert result.trades_log is not None
+    assert result.summary["buys"] >= 1
+    assert "benchmark core target=50%" in set(result.trades_log["reason"])
+
+    blocked = backtest(
+        DummyConfig(),
+        {"QQQ": qqq},
+        start_date=idx[60],
+        start_capital=100_000.0,
+        cost_bps=0.0,
+        earnings_calendar={"QQQ": [d for d in idx[60:]]},
+    )
+    assert blocked.summary is not None
+    assert blocked.summary["buys"] == 0
+
+
 if __name__ == "__main__":
     test_classical_signal_in_range()
     test_build_features_shape()
@@ -171,4 +252,5 @@ if __name__ == "__main__":
     test_market_regime_reduces_gross_exposure()
     test_benchmark_core_buy_targets_configured_sleeve()
     test_relative_strength_blocks_lagging_symbol()
+    test_backtest_uses_live_path_benchmark_core()
     print("smoke tests OK")

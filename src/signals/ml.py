@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 import joblib
 import numpy as np
@@ -64,7 +65,9 @@ def build_training_set(
         if len(df) < 80 + horizon_days:
             continue
         feats = build_features(df)
-        target = (df["close"].shift(-horizon_days) > df["close"]).astype(int)
+        future_close = df["close"].shift(-horizon_days)
+        target = (future_close > df["close"]).astype("float")
+        target[future_close.isna()] = np.nan
         joined = feats.join(target.rename("y")).dropna()
         if joined.empty:
             continue
@@ -73,7 +76,7 @@ def build_training_set(
     if not rows:
         return pd.DataFrame(), pd.Series(dtype=int)
     data = pd.concat(rows).sort_values(["_date", "_symbol"])
-    return data[FEATURES], data["y"]
+    return data[FEATURES], data["y"].astype(int)
 
 
 def train_model(
@@ -81,9 +84,27 @@ def train_model(
     model_path: Path,
     horizon_days: int = DEFAULT_HORIZON_DAYS,
 ) -> XGBClassifier | None:
+    bundle = train_model_bundle(hist, horizon_days=horizon_days)
+    if bundle is None:
+        return None
+
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(bundle, model_path)
+    log.info("saved model -> %s (horizon=%d days)", model_path, horizon_days)
+    return bundle["model"]
+
+
+def train_model_bundle(
+    hist: dict[str, pd.DataFrame],
+    horizon_days: int = DEFAULT_HORIZON_DAYS,
+) -> dict[str, Any] | None:
+    """Train an in-memory model bundle for backtests or later persistence."""
     X, y = build_training_set(hist, horizon_days=horizon_days)
     if X.empty:
         log.error("no training data assembled")
+        return None
+    if y.nunique() < 2:
+        log.error("training data has only one target class")
         return None
     # Hold out last 20% chronologically for a sanity check
     cut = int(len(X) * 0.8)
@@ -106,13 +127,7 @@ def train_model(
         acc = (model.predict(X_te) == y_te).mean()
         log.info("ML holdout accuracy: %.3f on n=%d", acc, len(X_te))
 
-    model_path.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(
-        {"model": model, "features": FEATURES, "horizon_days": horizon_days},
-        model_path,
-    )
-    log.info("saved model -> %s (horizon=%d days)", model_path, horizon_days)
-    return model
+    return {"model": model, "features": FEATURES, "horizon_days": horizon_days}
 
 
 def load_model(cfg: Config):

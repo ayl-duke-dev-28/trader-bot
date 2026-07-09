@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date as date_type, datetime, timedelta
 import logging
 from math import sqrt
 from pathlib import Path
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -13,9 +14,9 @@ import pandas as pd
 from src.config import Config
 from src.data.sectors import sector_for
 from src.risk.indicators import gap_pct, latest_atr_pct
+from src.signals.classical import classical_signal
 from src.signals.hedge_fund import hedge_fund_decision
 from src.signals.ml import build_features, load_model, ml_signal
-from src.trader import compute_signals
 
 log = logging.getLogger(__name__)
 
@@ -153,6 +154,25 @@ def _passes_relative_strength_at(
     return sym_ret >= bench_ret + min_excess
 
 
+def _near_earnings_at(
+    earnings_calendar: dict[str, list[date_type | datetime | pd.Timestamp | str]] | None,
+    symbol: str,
+    current_date: pd.Timestamp,
+    within_days: int,
+) -> bool:
+    if not earnings_calendar or within_days <= 0:
+        return False
+    current = current_date.date()
+    for raw_date in earnings_calendar.get(symbol.upper(), []):
+        try:
+            earnings_date = pd.Timestamp(raw_date).date()
+        except Exception:
+            continue
+        if current <= earnings_date <= current + timedelta(days=within_days):
+            return True
+    return False
+
+
 def _score_snapshot(cfg: Config, history: dict[str, pd.DataFrame], bundle) -> dict[str, float]:
     """Match trader.compute_signals, but avoid reloading the ML bundle every date."""
     use_hedge_fund = bool(cfg.get("strategies", "hedge_fund", "enabled", default=False))
@@ -162,10 +182,19 @@ def _score_snapshot(cfg: Config, history: dict[str, pd.DataFrame], bundle) -> di
             out[sym] = hedge_fund_decision(cfg, df, bundle=bundle).score if not df.empty else 0.0
         return out
 
-    # Falls back to the shared live helper for non-hedge-fund mode. Politician
-    # feeds are intentionally not backfilled here, so disable that strategy for
-    # reproducible historical runs unless a historical disclosure dataset exists.
-    return compute_signals(cfg, list(history), history=history)
+    w_cls = float(cfg.get("strategies", "classical", "weight", default=0.4)) if cfg.get("strategies", "classical", "enabled", default=True) else 0.0
+    w_ml = float(cfg.get("strategies", "ml", "weight", default=0.4)) if cfg.get("strategies", "ml", "enabled", default=True) else 0.0
+    total = max(1e-9, w_cls + w_ml)
+
+    out: dict[str, float] = {}
+    for sym, df in history.items():
+        if df is None or df.empty:
+            out[sym] = 0.0
+            continue
+        cls = classical_signal(df) if w_cls > 0 else 0.0
+        ml = ml_signal(cfg, df, bundle=bundle) if (w_ml > 0 and bundle is not None) else 0.0
+        out[sym] = float(np.clip((w_cls * cls + w_ml * ml) / total, -1.0, 1.0))
+    return out
 
 
 def _clip_series(series: pd.Series) -> pd.Series:
@@ -299,6 +328,9 @@ def simulate_current_bot(
     end_date: pd.Timestamp | None = None,
     start_capital: float = 100_000.0,
     cost_bps: float = 5.0,
+    earnings_calendar: dict[str, list[date_type | datetime | pd.Timestamp | str]] | None = None,
+    model_bundle: dict[str, Any] | None = None,
+    model_provider: Callable[[pd.Timestamp], dict[str, Any] | None] | None = None,
 ) -> SimulationResult:
     """Replay daily close-to-close decisions using the live bot's signal/risk rules."""
     if not history:
@@ -315,9 +347,15 @@ def simulate_current_bot(
     if len(sim_dates) < 2:
         raise ValueError("not enough dates in requested simulation window")
 
-    bundle = load_model(cfg) if cfg.get("strategies", "ml", "enabled", default=True) else None
+    bundle = model_bundle
+    if bundle is None and model_provider is None and cfg.get("strategies", "ml", "enabled", default=True):
+        bundle = load_model(cfg)
     use_precomputed_scores = bool(cfg.get("strategies", "hedge_fund", "enabled", default=False))
-    score_cache = _precompute_hedge_fund_scores(cfg, history, bundle) if use_precomputed_scores else {}
+    score_cache = (
+        _precompute_hedge_fund_scores(cfg, history, bundle)
+        if use_precomputed_scores and model_provider is None
+        else {}
+    )
     if score_cache:
         log.info("precomputed hedge-fund scores for %d symbols", len(score_cache))
     allow_fractional = bool(cfg.get("execution", "fractional_shares", default=True))
@@ -330,6 +368,7 @@ def simulate_current_bot(
     cooldown_days = int(_cfg_r(cfg, "cooldown_days", default=3))
     trailing_activate = float(_cfg_r(cfg, "trailing_activate_pct", default=0.08))
     trailing_giveback = float(_cfg_r(cfg, "trailing_giveback_pct", default=0.04))
+    earnings_blackout_days = int(_cfg_r(cfg, "earnings_blackout_days", default=0))
     sector_caps = dict(_cfg_r(cfg, "sector_caps", default={}) or {})
     signal_history_bars = int(cfg.get("data", "history_days", default=400))
 
@@ -408,12 +447,13 @@ def simulate_current_bot(
                 if not prior.empty:
                     scores[sym] = float(prior.iloc[-1])
         else:
+            active_bundle = model_provider(date) if model_provider is not None else bundle
             prior_history = {
                 sym: df.loc[:date].iloc[:-1].tail(signal_history_bars)
                 for sym, df in history.items()
                 if not df.loc[:date].iloc[:-1].empty
             }
-            scores = _score_snapshot(cfg, prior_history, bundle)
+            scores = _score_snapshot(cfg, prior_history, active_bundle)
 
         adjusted_max_gross_pct = _regime_adjusted_max_gross_pct(cfg, history, date, max_gross_pct)
         core_symbol = _benchmark_core_symbol(cfg)
@@ -452,7 +492,8 @@ def simulate_current_bot(
         core_cfg = _benchmark_core_cfg(cfg)
         core_target_pct = _benchmark_core_target_pct(cfg, adjusted_max_gross_pct, max_gross_pct)
         core_price = price_on(core_symbol, date)
-        if core_target_pct > 0 and core_price is not None and (core_symbol in positions or open_slots > 0):
+        core_blackout = _near_earnings_at(earnings_calendar, core_symbol, date, earnings_blackout_days)
+        if core_target_pct > 0 and core_price is not None and not core_blackout and (core_symbol in positions or open_slots > 0):
             existing = positions[core_symbol].market_value(core_price) if core_symbol in positions else 0.0
             target = min(current_equity * core_target_pct, current_equity * adjusted_max_gross_pct)
             delta = min(max(0.0, target - existing), remaining_gross)
@@ -493,6 +534,8 @@ def simulate_current_bot(
                 continue
             hist_today = history[sym].loc[:date]
             if not _passes_relative_strength_at(cfg, history, sym, date):
+                continue
+            if _near_earnings_at(earnings_calendar, sym, date, earnings_blackout_days):
                 continue
             if not hist_today.empty and abs(gap_pct(hist_today)) >= gap_skip_limit:
                 continue
