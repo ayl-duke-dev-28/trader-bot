@@ -5,7 +5,7 @@ Free-tier Alpaca trading bot that combines:
 - **Classical quant signals** — momentum, mean-reversion, MA-cross, RSI, MACD
 - **ML direction prediction** — XGBoost on engineered price/volume features
 - **Politician trade tracker** — Senate/House STOCK Act disclosures (free S3 datasets)
-- **Walk-forward backtester** — sanity-check strategies before risking capital
+- **Walk-forward backtester** — replays the live trading rules and retrains ML on rolling prior windows before each test window
 
 Built **paper-first, live-ready**: a single config flag flips to live, gated by extra env vars, a typed `YES` confirmation, a daily-loss kill switch, per-trade stop-losses, and exposure caps.
 
@@ -36,7 +36,7 @@ To deploy on a free Oracle Cloud VM see [docs/ORACLE_DEPLOY.md](docs/ORACLE_DEPL
 ## Usage
 
 ```bash
-# 1. Backtest (no broker connection needed)
+# 1. Walk-forward backtest (no broker connection needed)
 python scripts/backtest.py
 
 # 2. Train the ML model on the configured universe
@@ -50,6 +50,52 @@ python scripts/run_paper.py
 ```
 
 (In Docker: prefix any of these with `docker compose run --rm trader`.)
+
+## Backtesting
+
+`python scripts/backtest.py` is the primary trust check. It does **not** use a
+single model trained on the full dataset. By default it:
+
+- fetches the configured universe plus warmup history;
+- trains ML only on a rolling prior window (`756` calendar days by default);
+- tests only the immediately following window (`63` calendar days by default);
+- slides forward through time and repeats;
+- replays the live-path risk rules: benchmark core sleeve, regime filter,
+  relative strength, sector caps, gap skips, stop/trailing exits, cooldowns,
+  whole/fractional-share sizing, and trading costs.
+
+Useful options:
+
+```bash
+python scripts/backtest.py --years 20 --out-dir reports/backtests/walk_forward_20y
+python scripts/backtest.py --years 5 --train-window-days 756 --test-window-days 63
+python scripts/backtest.py --years 1 --max-symbols 25
+```
+
+Latest saved 20-year walk-forward run:
+
+- Report: `reports/backtests/walk_forward_20y/`
+- Period: `2006-07-10` to `2026-07-09`
+- Start capital: `$100,000`
+- Windows: `116` walk-forward windows, `756d` train / `63d` test
+- Trading cost: `5 bps`
+
+| Strategy / Benchmark | Final equity | Total return | CAGR | Sharpe | Max drawdown |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Trader bot | `$511,336.91` | `411.34%` | `8.50%` | `0.7187` | `-21.08%` |
+| Dow proxy (`DIA`) | `$734,096.11` | `634.10%` | `10.48%` | `0.6324` | `-51.87%` |
+| S&P 500 proxy (`SPY`) | `$855,802.69` | `755.80%` | `11.33%` | `0.6508` | `-55.19%` |
+| Nasdaq-100 proxy (`QQQ`) | `$2,264,156.07` | `2164.16%` | `16.88%` | `0.8185` | `-53.40%` |
+
+The bot's 20-year run had materially lower drawdown than the benchmarks, but
+lower final equity and CAGR. It beat `DIA` and `SPY` on Sharpe, but not `QQQ`.
+
+Bot trade stats for that run:
+
+- Trades: `6,699`
+- Buys / sells / stops: `3,543 / 1,785 / 1,371`
+- Closed win rate: `75.63%`
+- Symbols tested: `227`
 
 ## Trade activity log
 
@@ -83,6 +129,7 @@ src/
   politicians/tracker.py STOCK Act feeds -> per-symbol signal
   risk/manager.py        sizing, kill switch, stop-losses
   backtest/engine.py     walk-forward backtester
+  backtest/simulator.py  live-path historical simulator
   trader.py              main loop
 scripts/                 entry points
 tests/                   smoke tests (no network)
@@ -92,5 +139,6 @@ tests/                   smoke tests (no network)
 
 - yfinance is unofficial and may rate-limit; the data layer caches to `data_cache/`.
 - Politician-disclosure feeds are community-maintained and may move; URLs are in `src/politicians/tracker.py`.
-- Universe defaults to ~50 liquid NYSE names — "all NYSE" works in principle but invites rate-limiting on free APIs. Expand `src/data/nyse_universe.txt` at your own risk.
+- Universe defaults to a curated tech-heavy list from `src/data/tech_universe.txt`. Broad universes work in principle but invite rate-limiting on free APIs.
+- Backtests use today's configured universe and available historical data, so old periods exclude symbols that did not yet have enough history.
 - This is a tool, not investment advice.
