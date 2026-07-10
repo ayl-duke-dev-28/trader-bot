@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
 
-from src.broker.alpaca_client import AlpacaBroker
+from src.broker.alpaca_client import AlpacaBroker, Position
 from src.config import Config, ROOT, load_config
 from src.data.earnings import near_earnings, next_earnings_dates
 from src.data.market_data import get_history, get_history_many
@@ -149,6 +149,22 @@ def _apply_earnings_blackout(
     return [i for i in intents if not (i.side == "buy" and i.symbol in blocked)]
 
 
+def _execution_qty_price(
+    intent: TradeIntent,
+    prices: dict[str, float],
+    positions: dict[str, Position],
+    allow_fractional: bool,
+) -> tuple[float, float]:
+    """Return execution qty/price estimate without blocking closes on quote misses."""
+    price = prices.get(intent.symbol, 0.0)
+    if intent.side == "sell":
+        position = positions.get(intent.symbol)
+        if position is not None:
+            position_price = position.market_value / position.qty if position.qty > 0 else 0.0
+            return position.qty, price or position_price
+    return RiskManager.intent_to_qty(intent, price, allow_fractional=allow_fractional), price
+
+
 def trade_once(cfg: Config) -> None:
     broker = AlpacaBroker(cfg)
     trade_log = trade_logger_from_config(cfg)
@@ -178,6 +194,7 @@ def trade_once(cfg: Config) -> None:
 
     allow_fractional = bool(cfg.get("execution", "fractional_shares", default=True))
     open_buy_symbols = set() if dry else broker.open_order_symbols(side="buy")
+    execution_positions = {p.symbol: p for p in broker.positions()}
 
     for intent in intents:
         score = scores.get(intent.symbol)
@@ -189,8 +206,7 @@ def trade_once(cfg: Config) -> None:
                 reason=f"buy already pending; {intent.reason}",
             ))
             continue
-        price = prices.get(intent.symbol, 0.0)
-        qty = RiskManager.intent_to_qty(intent, price, allow_fractional=allow_fractional)
+        qty, price = _execution_qty_price(intent, prices, execution_positions, allow_fractional)
         msg = f"{intent.side.upper()} {intent.symbol} ~${intent.target_dollars:.0f} qty={qty} ({intent.reason})"
         if dry:
             log.info("[DRY] %s", msg)

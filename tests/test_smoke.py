@@ -15,8 +15,9 @@ from src.signals.classical import classical_signal
 from src.signals.hedge_fund import hedge_fund_decision
 from src.signals.ml import build_features, build_training_set
 from src.backtest.engine import backtest
+from src.broker.alpaca_client import Position
 from src.risk.manager import RiskManager, TradeIntent
-from src.trader import _consolidate_intents, _next_scheduled_run
+from src.trader import _consolidate_intents, _execution_qty_price, _next_scheduled_run
 
 
 def _fake_df(n: int = 200) -> pd.DataFrame:
@@ -86,6 +87,14 @@ def test_consolidate_duplicate_buy_intents():
     assert len(merged) == 2
     assert merged[0].symbol == "MKSI"
     assert merged[0].target_dollars == 2_345.94
+
+
+def test_sell_execution_uses_position_qty_when_quote_missing():
+    intent = TradeIntent("C", "sell", 2_113.0, "score=+0.00 <= exit_thr=+0.00")
+    position = Position("C", qty=25.0, avg_entry_price=80.0, market_value=2_125.0, unrealized_plpc=0.05)
+    qty, price = _execution_qty_price(intent, prices={}, positions={"C": position}, allow_fractional=False)
+    assert qty == 25.0
+    assert price == 85.0
 
 
 def test_market_regime_reduces_gross_exposure():
@@ -260,6 +269,7 @@ if __name__ == "__main__":
     test_hedge_fund_signal_in_range()
     test_intent_to_qty_whole_share_mode()
     test_consolidate_duplicate_buy_intents()
+    test_sell_execution_uses_position_qty_when_quote_missing()
     test_market_regime_reduces_gross_exposure()
     test_benchmark_core_buy_targets_configured_sleeve()
     test_relative_strength_blocks_lagging_symbol()
