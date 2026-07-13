@@ -84,7 +84,7 @@ risk:
   # portfolio-level circuit breaker for concentrated breakout mode. Once hit,
   # the bot liquidates and stops opening new positions until manually reset.
   portfolio_drawdown_guard:
-    enabled: true
+    enabled: false
     max_drawdown_pct: 0.55
 
   # volatility-scaled stop (replaces flat per_trade_stop_loss_pct)
