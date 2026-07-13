@@ -239,6 +239,10 @@ def test_backtest_uses_live_path_benchmark_core():
     assert result.summary is not None
     assert result.trades_log is not None
     assert result.summary["buys"] >= 1
+    assert result.summary["profit_days"] >= 0
+    assert result.summary["loss_days"] >= 0
+    assert 0.0 <= result.summary["loss_day_rate"] <= 1.0
+    assert "worst_day_return" in result.summary
     assert "benchmark core target=50%" in set(result.trades_log["reason"])
 
     blocked = backtest(

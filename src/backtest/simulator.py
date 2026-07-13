@@ -585,6 +585,8 @@ def simulate_current_bot(
     trades = pd.DataFrame(trade_rows)
     equity_series = equity_curve.set_index(pd.to_datetime(equity_curve["date"]))["equity"]
     rets = equity_series.pct_change().dropna()
+    loss_days = rets[rets < 0]
+    profit_days = rets[rets > 0]
     total_return = equity_series.iloc[-1] / start_capital - 1.0
     years = max(1e-9, (equity_series.index[-1] - equity_series.index[0]).days / 365.25)
     rolling_max = equity_series.cummax()
@@ -615,6 +617,12 @@ def simulate_current_bot(
         "cagr": float((1.0 + total_return) ** (1.0 / years) - 1.0),
         "sharpe": float(np.sqrt(252) * rets.mean() / rets.std()) if rets.std() > 0 else 0.0,
         "max_drawdown": float(drawdown.min()),
+        "profit_days": int(len(profit_days)),
+        "loss_days": int(len(loss_days)),
+        "flat_days": int((rets == 0).sum()),
+        "loss_day_rate": float(len(loss_days) / len(rets)) if len(rets) > 0 else 0.0,
+        "avg_loss_day_return": float(loss_days.mean()) if len(loss_days) > 0 else 0.0,
+        "worst_day_return": float(rets.min()) if len(rets) > 0 else 0.0,
         "trades": int(len(trades)),
         "buys": int((trades["action"] == "BUY").sum()) if not trades.empty else 0,
         "sells": int((trades["action"] == "SELL").sum()) if not trades.empty else 0,
@@ -634,7 +642,15 @@ def write_simulation_report(result: SimulationResult, out_dir: Path) -> None:
     lines = []
     for key, value in result.summary.items():
         if isinstance(value, float):
-            if key in {"total_return", "cagr", "max_drawdown", "closed_win_rate"}:
+            if key in {
+                "total_return",
+                "cagr",
+                "max_drawdown",
+                "closed_win_rate",
+                "loss_day_rate",
+                "avg_loss_day_return",
+                "worst_day_return",
+            }:
                 lines.append(f"{key}: {value:.2%}")
             else:
                 lines.append(f"{key}: {value:.4f}")

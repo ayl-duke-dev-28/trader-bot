@@ -84,6 +84,8 @@ def main() -> int:
     if result.summary:
         print(f"  Trades       : {result.trades} ({result.summary['buys']} buys, {result.summary['sells']} sells, {result.summary['stops']} stops)")
         print(f"  Win rate     : {result.summary['closed_win_rate'] * 100:>7.1f}%")
+        print(f"  Loss days    : {result.summary['loss_days']:>8} ({result.summary['loss_day_rate'] * 100:>5.1f}%)")
+        print(f"  Worst day    : {result.summary['worst_day_return'] * 100:>+8.2f}%")
         if "walk_forward_windows" in result.summary:
             print(f"  WF windows   : {result.summary['walk_forward_windows']} train={result.summary['walk_forward_train_window_days']}d test={result.summary['walk_forward_test_window_days']}d")
     else:
