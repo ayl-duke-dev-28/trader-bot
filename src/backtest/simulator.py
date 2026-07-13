@@ -17,6 +17,7 @@ from src.risk.indicators import gap_pct, latest_atr_pct
 from src.signals.classical import classical_signal
 from src.signals.hedge_fund import hedge_fund_decision
 from src.signals.ml import build_features, load_model, ml_signal
+from src.signals.momentum_breakout import momentum_breakout_scores
 
 log = logging.getLogger(__name__)
 
@@ -175,6 +176,9 @@ def _near_earnings_at(
 
 def _score_snapshot(cfg: Config, history: dict[str, pd.DataFrame], bundle) -> dict[str, float]:
     """Match trader.compute_signals, but avoid reloading the ML bundle every date."""
+    if cfg.get("strategies", "momentum_breakout", "enabled", default=False):
+        return momentum_breakout_scores(cfg, history)
+
     use_hedge_fund = bool(cfg.get("strategies", "hedge_fund", "enabled", default=False))
     if use_hedge_fund:
         out: dict[str, float] = {}

@@ -233,6 +233,12 @@ SECTOR_MAP: dict[str, str] = {
     # Tech ETFs — treat as its own bucket so a basket-buy doesn't stack on top
     # of single-name concentration in the same theme.
     "QQQ": "etf_tech",
+    "QLD": "etf_tech",
+    "TQQQ": "etf_tech",
+    "SSO": "etf_tech",
+    "UPRO": "etf_tech",
+    "DDM": "etf_tech",
+    "UDOW": "etf_tech",
     "SMH": "etf_tech",
     "SOXX": "etf_tech",
     "XLK": "etf_tech",

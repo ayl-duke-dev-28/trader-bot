@@ -20,6 +20,7 @@ from src.risk.manager import RiskManager, TradeIntent
 from src.signals.classical import classical_signal
 from src.signals.hedge_fund import hedge_fund_decision
 from src.signals.ml import load_model, ml_signal
+from src.signals.momentum_breakout import momentum_breakout_scores
 from src.trade_log import TradeLogEntry, TradeLogger, trade_logger_from_config
 
 log = logging.getLogger(__name__)
@@ -90,6 +91,9 @@ def compute_signals(
     if history is None:
         history = get_history_many(cfg, symbols)
     bundle = load_model(cfg) if cfg.get("strategies", "ml", "enabled", default=True) else None
+    if cfg.get("strategies", "momentum_breakout", "enabled", default=False):
+        return momentum_breakout_scores(cfg, history)
+
     use_hedge_fund = bool(cfg.get("strategies", "hedge_fund", "enabled", default=False))
 
     w_cls = float(cfg.get("strategies", "classical", "weight", default=0.4)) if cfg.get("strategies", "classical", "enabled", default=True) else 0.0

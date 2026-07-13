@@ -76,21 +76,25 @@ holidays, weekends, and unexpected closures are skipped safely.
 
 ## Backtesting
 
-`python scripts/backtest.py` is the primary trust check. It does **not** use a
-single model trained on the full dataset. By default it:
+`python scripts/backtest.py` is the primary trust check. By default it:
 
 - fetches the configured universe plus warmup history;
-- trains ML only on a rolling prior window (`756` calendar days by default);
-- tests only the immediately following window (`63` calendar days by default);
-- slides forward through time and repeats;
-- replays the live-path risk rules: benchmark core sleeve, regime filter,
-  relative strength, sector caps, gap skips, stop/trailing exits, cooldowns,
-  whole/fractional-share sizing, and trading costs.
+- runs the configured sparse `momentum_breakout` strategy;
+- ranks symbols by prior 252-day return;
+- buys only the top qualifying symbol when it is above its 100-day SMA, up at
+  least `300%` over the lookback, below the volatility cap, and `QQQ` is above
+  its 200-day SMA;
+- replays the live-path risk rules: sizing, sector caps, stop/trailing exits,
+  cooldowns, whole/fractional-share sizing, and trading costs.
+
+When ML is re-enabled, the backtester does **not** use a single model trained on
+the full dataset. It trains ML only on rolling prior windows and tests only the
+immediately following window.
 
 Useful options:
 
 ```bash
-python scripts/backtest.py --years 20 --out-dir reports/backtests/walk_forward_20y
+python scripts/backtest.py --years 20 --out-dir reports/backtests/momentum_breakout_20y_v3
 python scripts/backtest.py --years 5 --train-window-days 756 --test-window-days 63
 python scripts/backtest.py --years 1 --max-symbols 25
 ```
@@ -107,43 +111,34 @@ These are risk diagnostics, not an optimization guarantee. A strategy can have
 zero losing days by staying in cash, but any active long-equity strategy should
 expect some negative mark-to-market days.
 
-Latest saved 20-year walk-forward run:
+Latest saved 20-year momentum-breakout run:
 
-- Report: `reports/backtests/walk_forward_20y/`
-- Period: `2006-07-10` to `2026-07-09`
+- Report: `reports/backtests/momentum_breakout_20y_v3/`
+- Period: `2006-07-13` to `2026-07-13`
 - Start capital: `$100,000`
-- Windows: `116` walk-forward windows, `756d` train / `63d` test
 - Trading cost: `5 bps`
+- Benchmark comparison: `reports/backtests/momentum_breakout_20y_v3/benchmarks.csv`
 
-| Strategy / Benchmark | Final equity | Total return | CAGR | Sharpe | Max drawdown |
+| Strategy / Benchmark | Final equity | Total return | CAGR | Loss days | Max drawdown |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Trader bot | `$511,336.91` | `411.34%` | `8.50%` | `0.7187` | `-21.08%` |
-| Dow proxy (`DIA`) | `$734,096.11` | `634.10%` | `10.48%` | `0.6324` | `-51.87%` |
-| S&P 500 proxy (`SPY`) | `$855,802.69` | `755.80%` | `11.33%` | `0.6508` | `-55.19%` |
-| Nasdaq-100 proxy (`QQQ`) | `$2,264,156.07` | `2164.16%` | `16.88%` | `0.8185` | `-53.40%` |
+| Trader bot | `$8,820,201.59` | `8720.20%` | `25.10%` | `15.17%` | `-68.64%` |
+| Dow proxy (`DIA`) | `$753,715.90` | `653.72%` | `10.63%` | `44.82%` | `-51.87%` |
+| S&P 500 proxy (`SPY`) | `$872,409.40` | `772.41%` | `11.44%` | `44.54%` | `-55.19%` |
+| Nasdaq-100 proxy (`QQQ`) | `$2,292,458.90` | `2192.46%` | `16.95%` | `43.83%` | `-53.40%` |
 
-The bot's 20-year run had materially lower drawdown than the benchmarks, but
-lower final equity and CAGR. It beat `DIA` and `SPY` on Sharpe, but not `QQQ`.
+The bot beat the strongest benchmark (`QQQ`) by about `284.75%` on final equity
+and kept loss days below `20%`. This strategy is aggressive and concentrated:
+the same run had a `-68.64%` max drawdown and a `-23.39%` worst day.
 
 Bot trade stats for that run:
 
-- Trades: `6,699`
-- Buys / sells / stops: `3,543 / 1,785 / 1,371`
-- Closed win rate: `75.63%`
-- Loss days: `2,172` of `5,030` return days (`43.18%`)
-- Average loss day: `-0.586%`
-- Worst day: `-5.88%`
-- Symbols tested: `227`
-
-Representative 1-year daily-loss check including the `QQQ` benchmark core:
-
-- Report: `reports/backtests/daily_metrics_1y_qqq/`
-- Period: `2025-07-14` to `2026-07-13`
-- Total return: `30.36%`
-- Max drawdown: `-6.84%`
-- Loss days: `103` of `250` return days (`41.20%`)
-- Average loss day: `-0.78%`
-- Worst day: `-3.67%`
+- Trades: `437`
+- Buys / sells / stops: `219 / 218 / 0`
+- Closed win rate: `48.62%`
+- Loss days: `763` of `5,029` return days (`15.17%`)
+- Average loss day: `-2.81%`
+- Worst day: `-23.39%`
+- Symbols tested: `233`
 
 ## Trade activity log
 

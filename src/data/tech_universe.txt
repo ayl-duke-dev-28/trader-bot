@@ -248,6 +248,12 @@ SE
 
 # --- Tech ETFs (broad tech / semis / cloud / cyber / robotics / crypto / China) ---
 QQQ
+QLD
+TQQQ
+SSO
+UPRO
+DDM
+UDOW
 SMH
 SOXX
 XLK

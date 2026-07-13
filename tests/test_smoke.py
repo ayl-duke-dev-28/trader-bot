@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.signals.classical import classical_signal
 from src.signals.hedge_fund import hedge_fund_decision
 from src.signals.ml import build_features, build_training_set
+from src.signals.momentum_breakout import momentum_breakout_scores
 from src.backtest.engine import backtest
 from src.broker.alpaca_client import Position
 from src.risk.manager import RiskManager, TradeIntent
@@ -69,6 +70,34 @@ def test_hedge_fund_signal_in_range():
     assert -1.0 <= decision.score <= 1.0
     assert decision.signal in {"bullish", "bearish", "neutral"}
     assert decision.votes
+
+
+def test_momentum_breakout_selects_top_prior_winner():
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            if keys == ("strategies", "momentum_breakout"):
+                return {
+                    "enabled": True,
+                    "top_n": 1,
+                    "lookback_days": 60,
+                    "min_return": 0.50,
+                    "sma_window": 20,
+                    "volatility_window": 10,
+                    "max_annualized_vol": 10.0,
+                    "benchmark_symbol": "QQQ",
+                    "benchmark_sma_window": 20,
+                    "exclude_symbols": [],
+                }
+            return default
+
+    idx = pd.date_range("2024-01-01", periods=90, freq="B")
+    qqq = pd.DataFrame({"close": np.linspace(100.0, 120.0, len(idx)), "volume": 1_000_000}, index=idx)
+    winner = pd.DataFrame({"close": np.linspace(10.0, 30.0, len(idx)), "volume": 1_000_000}, index=idx)
+    laggard = pd.DataFrame({"close": np.linspace(10.0, 18.0, len(idx)), "volume": 1_000_000}, index=idx)
+
+    scores = momentum_breakout_scores(DummyConfig(), {"QQQ": qqq, "WIN": winner, "LAG": laggard})
+    assert scores["WIN"] == 1.0
+    assert scores["LAG"] == 0.0
 
 
 def test_intent_to_qty_whole_share_mode():
@@ -271,6 +300,7 @@ if __name__ == "__main__":
     test_build_features_shape()
     test_training_set_is_chronological_across_symbols()
     test_hedge_fund_signal_in_range()
+    test_momentum_breakout_selects_top_prior_winner()
     test_intent_to_qty_whole_share_mode()
     test_consolidate_duplicate_buy_intents()
     test_sell_execution_uses_position_qty_when_quote_missing()
