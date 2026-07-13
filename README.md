@@ -95,6 +95,18 @@ python scripts/backtest.py --years 5 --train-window-days 756 --test-window-days 
 python scripts/backtest.py --years 1 --max-symbols 25
 ```
 
+Backtest reports include daily P/L diagnostics in addition to total return,
+Sharpe, and max drawdown:
+
+- `profit_days`, `loss_days`, `flat_days`
+- `loss_day_rate`
+- `avg_loss_day_return`
+- `worst_day_return`
+
+These are risk diagnostics, not an optimization guarantee. A strategy can have
+zero losing days by staying in cash, but any active long-equity strategy should
+expect some negative mark-to-market days.
+
 Latest saved 20-year walk-forward run:
 
 - Report: `reports/backtests/walk_forward_20y/`
@@ -118,7 +130,20 @@ Bot trade stats for that run:
 - Trades: `6,699`
 - Buys / sells / stops: `3,543 / 1,785 / 1,371`
 - Closed win rate: `75.63%`
+- Loss days: `2,172` of `5,030` return days (`43.18%`)
+- Average loss day: `-0.586%`
+- Worst day: `-5.88%`
 - Symbols tested: `227`
+
+Representative 1-year daily-loss check including the `QQQ` benchmark core:
+
+- Report: `reports/backtests/daily_metrics_1y_qqq/`
+- Period: `2025-07-14` to `2026-07-13`
+- Total return: `30.36%`
+- Max drawdown: `-6.84%`
+- Loss days: `103` of `250` return days (`41.20%`)
+- Average loss day: `-0.78%`
+- Worst day: `-3.67%`
 
 ## Trade activity log
 
