@@ -80,6 +80,47 @@ class RiskManager:
             return True
         return False
 
+    def apply_portfolio_drawdown_guard(
+        self,
+        dry_run: bool = False,
+        mode: str = "paper",
+    ) -> bool:
+        """Liquidate and block new buys after portfolio drawdown exceeds config."""
+        guard_cfg = self._r("portfolio_drawdown_guard", default={}) or {}
+        if not bool(guard_cfg.get("enabled", False)):
+            return False
+        if self.state.portfolio_guard_tripped():
+            log.warning("portfolio drawdown guard already tripped; blocking new buys")
+            return True
+
+        acct = self.broker.account()
+        highwater = self.state.portfolio_highwater(acct.equity)
+        threshold = float(guard_cfg.get("max_drawdown_pct", 1.0))
+        if highwater <= 0:
+            return False
+        drawdown = acct.equity / highwater - 1.0
+        if drawdown > -threshold:
+            return False
+
+        log.warning(
+            "PORTFOLIO GUARD: drawdown %.2f%% <= -%.2f%% (highwater=%.2f now=%.2f)",
+            drawdown * 100,
+            threshold * 100,
+            highwater,
+            acct.equity,
+        )
+        for p in self.broker.positions():
+            self._close(
+                p,
+                dry_run,
+                cooldown_days=0,
+                mode=mode,
+                reason=f"portfolio drawdown guard {drawdown:.2%}",
+            )
+        if not dry_run:
+            self.state.trip_portfolio_guard()
+        return True
+
     # --- stops ------------------------------------------------------------
 
     def apply_stop_losses(
@@ -210,6 +251,10 @@ class RiskManager:
             max_gross_pct=max_gross_pct,
             normal_max_gross_pct=normal_max_gross_pct,
         )
+
+        if self.state.portfolio_guard_tripped():
+            log.warning("portfolio drawdown guard tripped; no new buys this cycle")
+            return intents
 
         if self.kill_switch_tripped():
             log.warning("kill switch tripped; no new buys this cycle")

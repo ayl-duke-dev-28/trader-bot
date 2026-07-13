@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys
 from datetime import datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -18,6 +19,7 @@ from src.signals.momentum_breakout import momentum_breakout_scores
 from src.backtest.engine import backtest
 from src.broker.alpaca_client import Position
 from src.risk.manager import RiskManager, TradeIntent
+from src.risk.state import RiskState
 from src.trader import _consolidate_intents, _execution_qty_price, _next_scheduled_run
 
 
@@ -145,6 +147,17 @@ def test_market_regime_reduces_gross_exposure():
     qqq = pd.DataFrame({"close": [100.0, 99.0, 98.0, 90.0]}, index=idx)
     risk = RiskManager(DummyConfig(), DummyBroker(), state=object())
     assert risk._regime_adjusted_max_gross_pct({"QQQ": qqq}, 0.8) == 0.2
+
+
+def test_risk_state_tracks_portfolio_guard():
+    with TemporaryDirectory() as tmp:
+        state = RiskState(Path(tmp) / "risk_state.json")
+        assert state.portfolio_highwater(100_000.0) == 100_000.0
+        assert state.portfolio_highwater(90_000.0) == 100_000.0
+        assert state.portfolio_highwater(110_000.0) == 110_000.0
+        assert not state.portfolio_guard_tripped()
+        state.trip_portfolio_guard()
+        assert state.portfolio_guard_tripped()
 
 
 def test_benchmark_core_buy_targets_configured_sleeve():
@@ -305,6 +318,7 @@ if __name__ == "__main__":
     test_consolidate_duplicate_buy_intents()
     test_sell_execution_uses_position_qty_when_quote_missing()
     test_market_regime_reduces_gross_exposure()
+    test_risk_state_tracks_portfolio_guard()
     test_benchmark_core_buy_targets_configured_sleeve()
     test_relative_strength_blocks_lagging_symbol()
     test_backtest_uses_live_path_benchmark_core()

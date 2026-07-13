@@ -186,6 +186,8 @@ def trade_once(cfg: Config) -> None:
     history = _history_for_all(cfg, symbols, held_symbols)
 
     risk.apply_stop_losses(history=history, dry_run=dry, mode=mode)
+    if risk.apply_portfolio_drawdown_guard(dry_run=dry, mode=mode):
+        return
 
     scores = compute_signals(cfg, symbols, history=history)
     prices = _last_prices(symbols)

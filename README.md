@@ -84,6 +84,8 @@ holidays, weekends, and unexpected closures are skipped safely.
 - buys only the top qualifying symbol when it is above its 100-day SMA, up at
   least `300%` over the lookback, below the volatility cap, and `QQQ` is above
   its 200-day SMA;
+- applies a portfolio drawdown circuit breaker that liquidates and blocks new
+  buys after a configured account-level drawdown;
 - replays the live-path risk rules: sizing, sector caps, stop/trailing exits,
   cooldowns, whole/fractional-share sizing, and trading costs.
 
@@ -94,7 +96,7 @@ immediately following window.
 Useful options:
 
 ```bash
-python scripts/backtest.py --years 20 --out-dir reports/backtests/momentum_breakout_20y_v3
+python scripts/backtest.py --years 20 --out-dir reports/backtests/momentum_breakout_portfolio_guard_55_20y
 python scripts/backtest.py --years 5 --train-window-days 756 --test-window-days 63
 python scripts/backtest.py --years 1 --max-symbols 25
 ```
@@ -111,33 +113,35 @@ These are risk diagnostics, not an optimization guarantee. A strategy can have
 zero losing days by staying in cash, but any active long-equity strategy should
 expect some negative mark-to-market days.
 
-Latest saved 20-year momentum-breakout run:
+Latest saved 20-year momentum-breakout run with portfolio guard:
 
-- Report: `reports/backtests/momentum_breakout_20y_v3/`
+- Report: `reports/backtests/momentum_breakout_portfolio_guard_55_20y/`
 - Period: `2006-07-13` to `2026-07-13`
 - Start capital: `$100,000`
 - Trading cost: `5 bps`
-- Benchmark comparison: `reports/backtests/momentum_breakout_20y_v3/benchmarks.csv`
+- Portfolio guard: liquidate and block new buys after `55%` account drawdown
+- Benchmark comparison: `reports/backtests/momentum_breakout_portfolio_guard_55_20y/benchmarks.csv`
 
 | Strategy / Benchmark | Final equity | Total return | CAGR | Loss days | Max drawdown |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Trader bot | `$8,820,201.59` | `8720.20%` | `25.10%` | `15.17%` | `-68.64%` |
+| Trader bot | `$2,450,743.00` | `2350.74%` | `17.35%` | `9.54%` | `-57.46%` |
 | Dow proxy (`DIA`) | `$753,715.90` | `653.72%` | `10.63%` | `44.82%` | `-51.87%` |
 | S&P 500 proxy (`SPY`) | `$872,409.40` | `772.41%` | `11.44%` | `44.54%` | `-55.19%` |
 | Nasdaq-100 proxy (`QQQ`) | `$2,292,458.90` | `2192.46%` | `16.95%` | `43.83%` | `-53.40%` |
 
-The bot beat the strongest benchmark (`QQQ`) by about `284.75%` on final equity
-and kept loss days below `20%`. This strategy is aggressive and concentrated:
-the same run had a `-68.64%` max drawdown and a `-23.39%` worst day.
+The guarded bot still beat the strongest benchmark (`QQQ`) by about `6.90%` on
+final equity and kept loss days below `20%`. It no longer clears the prior
+`QQQ + 10%` target, but it reduced max drawdown from the raw breakout run's
+`-68.64%` to `-57.46%` and cut loss days from `15.17%` to `9.54%`.
 
 Bot trade stats for that run:
 
-- Trades: `437`
-- Buys / sells / stops: `219 / 218 / 0`
-- Closed win rate: `48.62%`
-- Loss days: `763` of `5,029` return days (`15.17%`)
-- Average loss day: `-2.81%`
-- Worst day: `-23.39%`
+- Trades: `250`
+- Buys / sells / stops: `125 / 123 / 2`
+- Closed win rate: `48.00%`
+- Loss days: `480` of `5,029` return days (`9.54%`)
+- Average loss day: `-2.50%`
+- Worst day: `-14.51%`
 - Symbols tested: `233`
 
 ## Trade activity log

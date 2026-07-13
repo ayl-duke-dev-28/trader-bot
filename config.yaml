@@ -81,14 +81,20 @@ risk:
   # kill switch (day-start equity persists across restarts)
   daily_loss_kill_switch_pct: 0.03
 
+  # portfolio-level circuit breaker for concentrated breakout mode. Once hit,
+  # the bot liquidates and stops opening new positions until manually reset.
+  portfolio_drawdown_guard:
+    enabled: true
+    max_drawdown_pct: 0.55
+
   # volatility-scaled stop (replaces flat per_trade_stop_loss_pct)
-  stop_atr_mult: 100.0              # breakout exits are signal-driven
-  stop_min_pct: 0.50                # floor on stop distance
-  stop_max_pct: 0.50                # ceiling on stop distance
+  stop_atr_mult: 4.0                # cap concentrated breakout losses
+  stop_min_pct: 0.18                # floor on stop distance
+  stop_max_pct: 0.30                # ceiling on stop distance
 
   # trailing / chandelier lock — protect winners after they've run
-  trailing_activate_pct: 10.0       # disabled for breakout-mode backtests
-  trailing_giveback_pct: 1.0        # after arming, exit if pl drops this far from highwater
+  trailing_activate_pct: 0.50       # arm after a large breakout move
+  trailing_giveback_pct: 0.25       # after arming, exit if pl drops this far from highwater
 
   # post-stop-out cooldown to kill the whipsaw loop
   cooldown_days: 3

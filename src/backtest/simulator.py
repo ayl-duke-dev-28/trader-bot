@@ -375,11 +375,16 @@ def simulate_current_bot(
     earnings_blackout_days = int(_cfg_r(cfg, "earnings_blackout_days", default=0))
     sector_caps = dict(_cfg_r(cfg, "sector_caps", default={}) or {})
     signal_history_bars = int(cfg.get("data", "history_days", default=400))
+    drawdown_guard_cfg = _cfg_r(cfg, "portfolio_drawdown_guard", default={}) or {}
+    drawdown_guard_enabled = bool(drawdown_guard_cfg.get("enabled", False))
+    drawdown_guard_max = float(drawdown_guard_cfg.get("max_drawdown_pct", 1.0))
 
     cash = float(start_capital)
     positions: dict[str, SimPosition] = {}
     cooldown_until: dict[str, pd.Timestamp] = {}
     highwater: dict[str, float] = {}
+    portfolio_highwater = float(start_capital)
+    portfolio_guard_tripped = False
     trade_rows: list[dict[str, object]] = []
     curve_rows: list[dict[str, object]] = []
 
@@ -416,6 +421,47 @@ def simulate_current_bot(
         if date_idx == 1 or date_idx % 50 == 0:
             log.info("simulating %d/%d %s equity=$%.0f", date_idx, total_dates, date.date(), equity_on(date))
         current_equity = equity_on(date)
+        portfolio_highwater = max(portfolio_highwater, current_equity)
+
+        if (
+            drawdown_guard_enabled
+            and not portfolio_guard_tripped
+            and portfolio_highwater > 0
+            and current_equity / portfolio_highwater - 1.0 <= -drawdown_guard_max
+        ):
+            for sym, pos in list(positions.items()):
+                price = price_on(sym, date)
+                if price is None:
+                    continue
+                cash += pos.qty * price * (1.0 - cost_bps / 10_000.0)
+                positions.pop(sym, None)
+                highwater.pop(sym, None)
+                log_trade(
+                    date,
+                    "STOP",
+                    sym,
+                    pos.qty,
+                    price,
+                    None,
+                    f"portfolio drawdown guard {current_equity / portfolio_highwater - 1.0:.2%}",
+                )
+            portfolio_guard_tripped = True
+            curve_rows.append({
+                "date": date.date().isoformat(),
+                "equity": round(equity_on(date), 2),
+                "cash": round(cash, 2),
+                "positions": len(positions),
+            })
+            continue
+
+        if portfolio_guard_tripped:
+            curve_rows.append({
+                "date": date.date().isoformat(),
+                "equity": round(equity_on(date), 2),
+                "cash": round(cash, 2),
+                "positions": len(positions),
+            })
+            continue
 
         # Stop-loss and trailing exits are evaluated before new entries.
         for sym, pos in list(positions.items()):

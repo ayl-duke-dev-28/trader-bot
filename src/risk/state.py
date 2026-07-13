@@ -16,7 +16,12 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 
-_EMPTY: dict[str, Any] = {"cooldowns": {}, "highwater": {}, "day_equity": {}}
+_EMPTY: dict[str, Any] = {
+    "cooldowns": {},
+    "highwater": {},
+    "day_equity": {},
+    "portfolio": {},
+}
 
 
 class RiskState:
@@ -104,3 +109,23 @@ class RiskState:
             changed = True
         if changed:
             self._save()
+
+    # --- portfolio drawdown guard ----------------------------------------
+
+    def portfolio_highwater(self, current_equity: float) -> float:
+        if "highwater" not in self._data["portfolio"]:
+            self._data["portfolio"]["highwater"] = float(current_equity)
+            self._save()
+        highwater = float(self._data["portfolio"]["highwater"])
+        if current_equity > highwater:
+            highwater = float(current_equity)
+            self._data["portfolio"]["highwater"] = highwater
+            self._save()
+        return highwater
+
+    def portfolio_guard_tripped(self) -> bool:
+        return bool(self._data["portfolio"].get("guard_tripped", False))
+
+    def trip_portfolio_guard(self) -> None:
+        self._data["portfolio"]["guard_tripped"] = True
+        self._save()
