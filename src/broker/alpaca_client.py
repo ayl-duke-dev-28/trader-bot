@@ -6,8 +6,11 @@ trips additional guardrails enforced in src/risk/manager.py.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
+from typing import Callable, TypeVar
 
+from requests.exceptions import RequestException
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.enums import QueryOrderStatus
@@ -16,6 +19,23 @@ from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest
 from src.config import Config
 
 log = logging.getLogger(__name__)
+T = TypeVar("T")
+
+
+def _retry_request(label: str, fn: Callable[[], T], *, attempts: int = 3, delay_seconds: float = 1.0) -> T:
+    """Retry read-only Alpaca calls that sometimes fail on transient network resets."""
+    last_error: BaseException | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except (RequestException, OSError) as e:
+            last_error = e
+            if attempt >= attempts:
+                break
+            log.warning("%s failed on attempt %d/%d: %s; retrying", label, attempt, attempts, e)
+            time.sleep(delay_seconds)
+    log.error("%s failed after %d attempts: %s", label, attempts, last_error)
+    raise last_error or RuntimeError(f"{label} failed")
 
 
 @dataclass
@@ -46,7 +66,7 @@ class AlpacaBroker:
         log.info("Alpaca broker initialized in %s mode", "LIVE" if cfg.is_live else "paper")
 
     def account(self) -> Account:
-        a = self.client.get_account()
+        a = _retry_request("Alpaca account fetch", self.client.get_account)
         return Account(
             equity=float(a.equity),
             cash=float(a.cash),
@@ -56,7 +76,8 @@ class AlpacaBroker:
 
     def positions(self) -> list[Position]:
         out = []
-        for p in self.client.get_all_positions():
+        positions = _retry_request("Alpaca positions fetch", self.client.get_all_positions)
+        for p in positions:
             out.append(
                 Position(
                     symbol=p.symbol,
@@ -69,12 +90,16 @@ class AlpacaBroker:
         return out
 
     def is_market_open(self) -> bool:
-        return bool(self.client.get_clock().is_open)
+        clock = _retry_request("Alpaca clock fetch", self.client.get_clock)
+        return bool(clock.is_open)
 
     def open_order_symbols(self, side: str | None = None) -> set[str]:
         """Return symbols with currently open orders, optionally filtered by side."""
         try:
-            orders = self.client.get_orders(filter=GetOrdersRequest(status=QueryOrderStatus.OPEN))
+            orders = _retry_request(
+                "Alpaca open orders fetch",
+                lambda: self.client.get_orders(filter=GetOrdersRequest(status=QueryOrderStatus.OPEN)),
+            )
         except Exception as e:
             log.warning("open orders fetch failed: %s", e)
             return set()

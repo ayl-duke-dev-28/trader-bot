@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+from requests.exceptions import ConnectionError as RequestsConnectionError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -17,7 +18,7 @@ from src.signals.hedge_fund import hedge_fund_decision
 from src.signals.ml import build_features, build_training_set
 from src.signals.momentum_breakout import momentum_breakout_scores
 from src.backtest.engine import backtest
-from src.broker.alpaca_client import Position
+from src.broker.alpaca_client import Position, _retry_request
 from src.risk.manager import RiskManager, TradeIntent
 from src.risk.state import RiskState
 from src.trader import _consolidate_intents, _execution_qty_price, _next_scheduled_run
@@ -126,6 +127,19 @@ def test_sell_execution_uses_position_qty_when_quote_missing():
     qty, price = _execution_qty_price(intent, prices={}, positions={"C": position}, allow_fractional=False)
     assert qty == 25.0
     assert price == 85.0
+
+
+def test_alpaca_read_retry_recovers_from_connection_reset():
+    calls = {"count": 0}
+
+    def flaky_read():
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RequestsConnectionError("connection reset by peer")
+        return "ok"
+
+    assert _retry_request("test read", flaky_read, attempts=2, delay_seconds=0.0) == "ok"
+    assert calls["count"] == 2
 
 
 def test_market_regime_reduces_gross_exposure():
@@ -317,6 +331,7 @@ if __name__ == "__main__":
     test_intent_to_qty_whole_share_mode()
     test_consolidate_duplicate_buy_intents()
     test_sell_execution_uses_position_qty_when_quote_missing()
+    test_alpaca_read_retry_recovers_from_connection_reset()
     test_market_regime_reduces_gross_exposure()
     test_risk_state_tracks_portfolio_guard()
     test_benchmark_core_buy_targets_configured_sleeve()
