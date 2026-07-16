@@ -187,6 +187,10 @@ tests/                   smoke tests (no network)
 ## Caveats
 
 - yfinance is unofficial and may rate-limit; the data layer caches to `data_cache/`.
+- Read-only Alpaca calls (account, positions, clock, open orders) retry on transient
+  network errors. Order submission does **not** retry: a reset mid-submit leaves the
+  order's fate unknown, and a blind retry risks duplicating a filled order. Those
+  failures are logged as `FAIL` in the trade log and left for the next cycle.
 - Politician-disclosure feeds are community-maintained and may move; URLs are in `src/politicians/tracker.py`.
 - Universe defaults to a curated tech-heavy list from `src/data/tech_universe.txt`. Broad universes work in principle but invite rate-limiting on free APIs.
 - Backtests use today's configured universe and available historical data, so old periods exclude symbols that did not yet have enough history.
