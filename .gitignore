@@ -1,12 +1,32 @@
+# Local configuration and secrets
 .env
+
+# Python runtime artifacts
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
 .venv/
 venv/
+
+# OS/editor noise
 .DS_Store
+.ipynb_checkpoints/
+.claude/
+
+# Generated market data and runtime state
 data_cache/
-models/*.joblib
-models/*.pkl
 logs/
 *.log
-.ipynb_checkpoints/
+
+# Generated model artifacts
+models/*.joblib
+models/*.pkl
+
+# Ad-hoc live-path report exports
+reports/backtests/live_path_*/
