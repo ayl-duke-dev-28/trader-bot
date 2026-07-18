@@ -79,24 +79,20 @@ holidays, weekends, and unexpected closures are skipped safely.
 `python scripts/backtest.py` is the primary trust check. By default it:
 
 - fetches the configured universe plus warmup history;
-- runs the configured sparse `momentum_breakout` strategy;
-- ranks symbols by prior 252-day return;
-- buys only the top qualifying symbol when it is above its 100-day SMA, up at
-  least `300%` over the lookback, below the volatility cap, and `QQQ` is above
-  its 200-day SMA;
+- runs the currently configured strategy stack from `config.yaml`;
 - replays the live-path risk rules: sizing, sector caps, stop/trailing exits,
   cooldowns, whole/fractional-share sizing, and trading costs.
 
-When ML is re-enabled, the backtester does **not** use a single model trained on
-the full dataset. It trains ML only on rolling prior windows and tests only the
+When ML is enabled, the backtester does **not** use a single model trained on the
+full dataset. It trains ML only on rolling prior windows and tests only the
 immediately following window.
 
 Useful options:
 
 ```bash
-python scripts/backtest.py --years 20 --out-dir reports/backtests/momentum_breakout_20y_v3
-python scripts/backtest.py --years 5 --train-window-days 756 --test-window-days 63
-python scripts/backtest.py --years 1 --max-symbols 25
+python scripts/backtest.py --years 5 --out-dir reports/backtests/walk_forward_5y
+python scripts/backtest.py --years 20 --out-dir reports/backtests/walk_forward_20y
+python scripts/backtest.py --years 1 --out-dir reports/backtests/daily_metrics_1y_qqq
 ```
 
 Backtest reports include daily P/L diagnostics in addition to total return,
@@ -111,40 +107,17 @@ These are risk diagnostics, not an optimization guarantee. A strategy can have
 zero losing days by staying in cash, but any active long-equity strategy should
 expect some negative mark-to-market days.
 
-Latest saved 20-year raw momentum-breakout run:
+Current saved strategy reports:
 
-- Report: `reports/backtests/momentum_breakout_20y_v3/`
-- Period: `2006-07-13` to `2026-07-13`
-- Start capital: `$100,000`
-- Trading cost: `5 bps`
-- Portfolio guard: disabled
-- Benchmark comparison: `reports/backtests/momentum_breakout_20y_v3/benchmarks.csv`
-
-| Strategy / Benchmark | Final equity | Total return | CAGR | Loss days | Max drawdown |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Trader bot | `$8,820,201.59` | `8720.20%` | `25.10%` | `15.17%` | `-68.64%` |
-| Dow proxy (`DIA`) | `$753,715.90` | `653.72%` | `10.63%` | `44.82%` | `-51.87%` |
-| S&P 500 proxy (`SPY`) | `$872,409.40` | `772.41%` | `11.44%` | `44.54%` | `-55.19%` |
-| Nasdaq-100 proxy (`QQQ`) | `$2,292,458.90` | `2192.46%` | `16.95%` | `43.83%` | `-53.40%` |
-
-The raw bot beat the strongest benchmark (`QQQ`) by about `284.75%` on final
-equity and kept loss days below `20%`. This is the more volatile profile:
-max drawdown was `-68.64%` and worst day was `-23.39%`.
-
-A safer alternative is saved at
-`reports/backtests/momentum_breakout_portfolio_guard_55_20y/`. That guarded run
-reduced max drawdown to `-57.46%` and loss days to `9.54%`, but final equity fell
-to `$2,450,743.47`, only `6.90%` above `QQQ`.
-
-Bot trade stats for that run:
-
-- Trades: `437`
-- Buys / sells / stops: `219 / 218 / 0`
-- Closed win rate: `48.62%`
-- Loss days: `763` of `5,029` return days (`15.17%`)
-- Average loss day: `-2.81%`
-- Worst day: `-23.39%`
-- Symbols tested: `233`
+- `reports/backtests/benchmark_aware_5y/` — 5-year run with benchmark-core and
+  relative-strength risk layers; final equity `$165,185.92`, CAGR `10.57%`,
+  max drawdown `-20.32%`.
+- `reports/backtests/walk_forward_5y/` — 5-year walk-forward ML run; final
+  equity `$168,761.46`, CAGR `11.04%`, max drawdown `-21.26%`.
+- `reports/backtests/walk_forward_20y/` — 20-year walk-forward ML run; final
+  equity `$511,336.91`, CAGR `8.50%`, max drawdown `-21.08%`.
+- `reports/backtests/daily_metrics_1y_qqq/` — 1-year current-strategy diagnostic;
+  final equity `$130,358.84`, CAGR `30.48%`, max drawdown `-6.84%`.
 
 ## Trade activity log
 
