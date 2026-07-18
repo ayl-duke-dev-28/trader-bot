@@ -1,13 +1,35 @@
 # trader-bot
 
-Free-tier Alpaca trading bot that combines:
+Free-tier Alpaca trading bot for paper/live Alpaca accounts.
 
-- **Classical quant signals** — momentum, mean-reversion, MA-cross, RSI, MACD
-- **ML direction prediction** — XGBoost on engineered price/volume features
-- **Politician trade tracker** — Senate/House STOCK Act disclosures (free S3 datasets)
-- **Walk-forward backtester** — replays the live trading rules and retrains ML on rolling prior windows before each test window
+Current configured strategy:
 
-Built **paper-first, live-ready**: a single config flag flips to live, gated by extra env vars, a typed `YES` confirmation, a daily-loss kill switch, per-trade stop-losses, and exposure caps.
+- **Hedge-fund ensemble** — enabled; multi-analyst scoring path.
+- **Classical quant signals** — enabled; momentum, mean-reversion, MA-cross,
+  RSI, and MACD.
+- **ML direction prediction** — enabled; XGBoost model at
+  `models/xgb_direction.joblib`.
+- **Benchmark-aware risk layer** — enabled; keeps a `QQQ` core sleeve in
+  risk-on regimes and requires individual names to beat `QQQ`.
+- **Momentum breakout** — present in code but disabled in `config.yaml`.
+- **Politician trade tracker** — present in code but disabled in `config.yaml`.
+
+Built **paper-first, live-ready**: `mode: paper` is the current default, while
+live trading requires live Alpaca keys, `mode: live`, and a typed `YES`
+confirmation before orders are submitted.
+
+## Current State
+
+- Mode: `paper`
+- Universe: `src/data/tech_universe.txt`, capped at `250` symbols
+- Position sizing: max `5%` per position, max `80%` gross exposure, max `20`
+  positions
+- Market regime filter: `QQQ` above/below its `200`-day SMA
+- Benchmark core: `QQQ`, `50%` target in risk-on regimes
+- Relative strength: enabled versus `QQQ` over `63` trading days
+- Daily loss kill switch: `3%`
+- Stops: ATR-scaled, floored at `4%`, capped at `12%`
+- Schedule: weekdays from `09:30` through `15:30` ET, hourly
 
 ## Setup — native Python
 
@@ -109,15 +131,39 @@ expect some negative mark-to-market days.
 
 Current saved strategy reports:
 
-- `reports/backtests/benchmark_aware_5y/` — 5-year run with benchmark-core and
-  relative-strength risk layers; final equity `$165,185.92`, CAGR `10.57%`,
-  max drawdown `-20.32%`.
-- `reports/backtests/walk_forward_5y/` — 5-year walk-forward ML run; final
-  equity `$168,761.46`, CAGR `11.04%`, max drawdown `-21.26%`.
-- `reports/backtests/walk_forward_20y/` — 20-year walk-forward ML run; final
-  equity `$511,336.91`, CAGR `8.50%`, max drawdown `-21.08%`.
-- `reports/backtests/daily_metrics_1y_qqq/` — 1-year current-strategy diagnostic;
-  final equity `$130,358.84`, CAGR `30.48%`, max drawdown `-6.84%`.
+| Report | Period | Final equity | CAGR | Sharpe | Max drawdown | Notes |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| `reports/backtests/benchmark_aware_5y/` | `2021-07-08` to `2026-07-07` | `$165,185.92` | `10.57%` | `0.8520` | `-20.32%` | Benchmark-core and relative-strength risk layers |
+| `reports/backtests/walk_forward_5y/` | `2021-07-09` to `2026-07-09` | `$168,761.46` | `11.04%` | `0.8857` | `-21.26%` | 29 walk-forward ML windows |
+| `reports/backtests/walk_forward_20y/` | `2006-07-10` to `2026-07-09` | `$511,336.91` | `8.50%` | `0.7187` | `-21.08%` | 116 walk-forward ML windows |
+| `reports/backtests/daily_metrics_1y_qqq/` | `2025-07-14` to `2026-07-13` | `$130,358.84` | `30.48%` | `1.7966` | `-6.84%` | 1-year daily P/L diagnostic |
+
+The remaining report files are `summary.txt`, `equity_curve.csv`, and
+`trades.csv` for each report. `walk_forward_20y` also has `benchmarks.csv`.
+
+## Current Files
+
+Important tracked files:
+
+- `config.yaml` — current strategy, risk, universe, schedule, and logging config
+- `requirements.txt` — Python dependencies
+- `Dockerfile` and `docker-compose.yml` — containerized runner
+- `docs/ORACLE_DEPLOY.md` — Oracle VM deployment notes
+- `docs/RESEARCH_COCKPIT_DESIGN.md` — research UI/design notes
+- `scripts/backtest.py` — live-path historical backtester
+- `scripts/simulate_backtest.py` — simulation report runner
+- `scripts/train_models.py` — trains `models/xgb_direction.joblib`
+- `scripts/run_paper.py` — starts the scheduled paper/live loop
+- `scripts/politicians_analyze.py` — inspects disclosure feeds
+
+Important local/generated files:
+
+- `.env` — local Alpaca credentials; ignored by git
+- `logs/trader.log` — runtime log; ignored by git
+- `logs/trades.xlsx` — trade activity workbook; ignored by git
+- `models/xgb_direction.joblib` — trained ML artifact; ignored by git
+- `data_cache/` — recreated on demand by yfinance fetches; ignored by git
+- `.venv/` — local Python environment; ignored by git and currently absent after cleanup
 
 ## Trade activity log
 
@@ -141,17 +187,42 @@ file so you can review *why* each trade was made after the fact.
 ## Layout
 
 ```
-config.yaml              tunables (universe, weights, risk caps)
+.env                     local secrets and Alpaca keys (ignored)
+.env.example             environment template
+config.yaml              current mode, universe, strategies, risk, schedule
+requirements.txt         Python dependencies
+Dockerfile               container image
+docker-compose.yml       container runner
+docs/
+  ORACLE_DEPLOY.md       Oracle Cloud VM deployment notes
+  RESEARCH_COCKPIT_DESIGN.md
+                          research cockpit design notes
+models/
+  xgb_direction.joblib   trained ML model artifact (ignored)
+reports/backtests/
+  benchmark_aware_5y/    current-strategy 5-year benchmark-aware run
+  walk_forward_5y/       current-strategy 5-year walk-forward run
+  walk_forward_20y/      current-strategy 20-year walk-forward run
+  daily_metrics_1y_qqq/  current-strategy 1-year daily metrics run
+logs/
+  trader.log             runtime log (ignored)
+  trades.xlsx            activity log workbook (ignored)
 src/
   config.py              .env + yaml loader
-  broker/alpaca_client.py  alpaca-py wrapper
+  broker/alpaca_client.py
+                          alpaca-py wrapper
   data/                  universe + cached yfinance fetcher
   signals/classical.py   technical-analysis composite signal
+  signals/hedge_fund.py  current ensemble scoring path
   signals/ml.py          XGBoost direction model
+  signals/momentum_breakout.py
+                          disabled breakout strategy implementation
   politicians/tracker.py STOCK Act feeds -> per-symbol signal
   risk/manager.py        sizing, kill switch, stop-losses
+  risk/state.py          persisted risk state helpers
   backtest/engine.py     walk-forward backtester
   backtest/simulator.py  live-path historical simulator
+  trade_log.py           Excel activity log writer
   trader.py              main loop
 scripts/                 entry points
 tests/                   smoke tests (no network)
