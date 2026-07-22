@@ -100,7 +100,7 @@ risk:
   cooldown_days: 3
 
   # entry/exit hysteresis: enter high, exit at zero
-  entry_score_threshold: 0.50
+  entry_score_threshold: 0.55
   exit_score_threshold: 0.0
 
   # sector concentration caps (tech-focused)
