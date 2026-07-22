@@ -24,6 +24,8 @@ confirmation before orders are submitted.
 - Universe: `src/data/tech_universe.txt`, capped at `250` symbols
 - Position sizing: max `5%` per position, max `80%` gross exposure, max `20`
   positions
+- Signal thresholds: enter at `0.50` or higher; exit when the score reaches
+  `0.00` or lower
 - Market regime filter: `QQQ` above/below its `200`-day SMA
 - Benchmark core: `QQQ`, `50%` target in risk-on regimes
 - Relative strength: enabled versus `QQQ` over `63` trading days
