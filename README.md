@@ -131,12 +131,13 @@ These are risk diagnostics, not an optimization guarantee. A strategy can have
 zero losing days by staying in cash, but any active long-equity strategy should
 expect some negative mark-to-market days.
 
-Current saved strategy reports:
+Current saved strategy reports are limited to the retained benchmark and
+walk-forward runs. Temporary parameter-comparison reports are not retained.
 
 | Report | Period | Final equity | CAGR | Sharpe | Max drawdown | Notes |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
 | `reports/backtests/benchmark_aware_5y/` | `2021-07-08` to `2026-07-07` | `$165,185.92` | `10.57%` | `0.8520` | `-20.32%` | Benchmark-core and relative-strength risk layers |
-| `reports/backtests/walk_forward_5y/` | `2021-07-09` to `2026-07-09` | `$168,761.46` | `11.04%` | `0.8857` | `-21.26%` | 29 walk-forward ML windows |
+| `reports/backtests/walk_forward_5y/` | `2021-07-09` to `2026-07-09` | `$168,761.46` | `11.04%` | `0.8857` | `-21.26%` | Selected `0.55` entry threshold; 29 walk-forward ML windows |
 | `reports/backtests/walk_forward_20y/` | `2006-07-10` to `2026-07-09` | `$511,336.91` | `8.50%` | `0.7187` | `-21.08%` | 116 walk-forward ML windows |
 | `reports/backtests/daily_metrics_1y_qqq/` | `2025-07-14` to `2026-07-13` | `$130,358.84` | `30.48%` | `1.7966` | `-6.84%` | 1-year daily P/L diagnostic |
 
