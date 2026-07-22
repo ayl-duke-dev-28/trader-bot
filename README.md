@@ -33,6 +33,22 @@ confirmation before orders are submitted.
 - Stops: ATR-scaled, floored at `4%`, capped at `12%`
 - Schedule: weekdays from `09:30` through `15:30` ET, hourly
 
+## Approved Next Experiment — volatility-targeted exposure
+
+An approved design proposes replacing the fixed `80%` risk-on exposure ceiling
+with a volatility-scaled target between `60%` and `95%`. The existing QQQ
+`200`-day-SMA regime rule remains authoritative, including the `20%` risk-off
+target. The goal is higher bull-market participation without materially worsening
+the strategy's historical drawdown.
+
+This feature is **designed but not implemented or enabled**. It must be built
+behind a disabled configuration flag and pass pre-registered discovery,
+withheld-period, stressed-cost, live/backtest-parity, and paper-trading gates.
+Failure leaves the current `80%` risk-on / `20%` risk-off policy unchanged.
+
+See [the approved volatility-targeting design](docs/design-volatility-targeted-exposure.md)
+for the formula, order-accounting rules, safeguards, and acceptance criteria.
+
 ## Setup — native Python
 
 ```bash
@@ -153,6 +169,8 @@ Important tracked files:
 - `Dockerfile` and `docker-compose.yml` — containerized runner
 - `docs/ORACLE_DEPLOY.md` — Oracle VM deployment notes
 - `docs/RESEARCH_COCKPIT_DESIGN.md` — research UI/design notes
+- `docs/design-volatility-targeted-exposure.md` — approved, not-yet-implemented
+  volatility-targeting experiment
 - `scripts/backtest.py` — live-path historical backtester
 - `scripts/simulate_backtest.py` — simulation report runner
 - `scripts/train_models.py` — trains `models/xgb_direction.joblib`
@@ -200,6 +218,8 @@ docs/
   ORACLE_DEPLOY.md       Oracle Cloud VM deployment notes
   RESEARCH_COCKPIT_DESIGN.md
                           research cockpit design notes
+  design-volatility-targeted-exposure.md
+                          approved volatility-targeting experiment design
 models/
   xgb_direction.joblib   trained ML model artifact (ignored)
 reports/backtests/
