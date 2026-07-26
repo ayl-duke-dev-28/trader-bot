@@ -29,6 +29,8 @@ confirmation before orders are submitted.
 - Market regime filter: `QQQ` above/below its `200`-day SMA
 - Benchmark core: `QQQ`, `50%` target in risk-on regimes
 - Relative strength: enabled versus `QQQ` over `63` trading days
+- Institutional trend vote: 3/6/12-month direction, scaled by 60-day volatility
+- Volatility-targeted exposure: implemented behind a disabled research flag
 - Daily loss kill switch: `3%`
 - Stops: ATR-scaled, floored at `4%`, capped at `12%`
 - Schedule: weekdays from `09:30` through `15:30` ET, hourly
@@ -41,10 +43,11 @@ with a volatility-scaled target between `60%` and `95%`. The existing QQQ
 target. The goal is higher bull-market participation without materially worsening
 the strategy's historical drawdown.
 
-This feature is **designed but not implemented or enabled**. It must be built
-behind a disabled configuration flag and pass pre-registered discovery,
-withheld-period, stressed-cost, live/backtest-parity, and paper-trading gates.
-Failure leaves the current `80%` risk-on / `20%` risk-off policy unchanged.
+The shared exposure calculation and conservative rebalance path are
+**implemented but not enabled**. They are behind a disabled configuration flag.
+The selected research candidate uses 60-day QQQ volatility and an 18% annualized
+target, but it still must pass broader-universe, stressed-cost, and paper-trading
+gates. Failure leaves the current `80%` risk-on / `20%` risk-off policy unchanged.
 
 See [the approved volatility-targeting design](docs/design-volatility-targeted-exposure.md)
 for the formula, order-accounting rules, safeguards, and acceptance criteria.

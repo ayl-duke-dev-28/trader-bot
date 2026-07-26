@@ -55,6 +55,21 @@ risk:
   max_gross_exposure: 0.80          # total long exposure cap in normal markets
   max_positions: 20
 
+  # Institutional-style risk scaling: trend decides whether risk is allowed,
+  # realized QQQ volatility decides how much. Keep disabled until the A/B
+  # walk-forward gates documented in docs/design-volatility-targeted-exposure.md pass.
+  volatility_targeting:
+    enabled: false
+    benchmark_symbol: QQQ
+    lookback_days: 60
+    target_annualized_vol: 0.18
+    risk_on_min_gross_exposure: 0.60
+    risk_on_max_gross_exposure: 0.95
+    realized_vol_floor: 0.08
+    realized_vol_ceiling: 0.60
+    rebalance_band_pct: 0.05
+    min_rebalance_dollars: 500
+
   # market regime filter: avoid adding risk during broad tech downtrends
   market_regime:
     enabled: true

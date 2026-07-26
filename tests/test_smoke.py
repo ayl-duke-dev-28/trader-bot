@@ -20,6 +20,7 @@ from src.signals.momentum_breakout import momentum_breakout_scores
 from src.backtest.engine import backtest
 from src.broker.alpaca_client import Position, _retry_request
 from src.risk.manager import RiskManager, TradeIntent
+from src.risk.exposure import ExposureDecision, ExposureReason, MarketRegime, exposure_decision
 from src.risk.state import RiskState
 from src.trader import _consolidate_intents, _execution_qty_price, _next_scheduled_run
 
@@ -161,6 +162,102 @@ def test_market_regime_reduces_gross_exposure():
     qqq = pd.DataFrame({"close": [100.0, 99.0, 98.0, 90.0]}, index=idx)
     risk = RiskManager(DummyConfig(), DummyBroker(), state=object())
     assert risk._regime_adjusted_max_gross_pct({"QQQ": qqq}, 0.8) == 0.2
+
+
+def test_volatility_targeting_scales_calm_risk_on_market():
+    idx = pd.date_range("2023-01-01", periods=260, freq="B")
+    close = 100.0 * np.exp(np.arange(len(idx)) * 0.0005)
+    qqq = pd.DataFrame({"close": close}, index=idx)
+    decision = exposure_decision(
+        qqq,
+        enabled=True,
+        normal_max_gross=0.80,
+        risk_off_max_gross=0.20,
+        current_gross=0.50,
+        sma_window=200,
+        lookback_days=20,
+        target_annualized_vol=0.18,
+        risk_on_min_gross=0.60,
+        risk_on_max_gross=0.95,
+        realized_vol_floor=0.08,
+        realized_vol_ceiling=0.60,
+    )
+    assert decision.regime is MarketRegime.RISK_ON
+    assert decision.reason is ExposureReason.CLAMPED_MAX
+    assert decision.gross_target == 0.95
+
+
+def test_volatility_targeting_risk_off_rule_wins():
+    idx = pd.date_range("2023-01-01", periods=260, freq="B")
+    qqq = pd.DataFrame({"close": np.linspace(200.0, 80.0, len(idx))}, index=idx)
+    decision = exposure_decision(
+        qqq,
+        enabled=True,
+        normal_max_gross=0.80,
+        risk_off_max_gross=0.20,
+        current_gross=0.80,
+        sma_window=200,
+        lookback_days=20,
+        target_annualized_vol=0.18,
+        risk_on_min_gross=0.60,
+        risk_on_max_gross=0.95,
+        realized_vol_floor=0.08,
+        realized_vol_ceiling=0.60,
+    )
+    assert decision.regime is MarketRegime.RISK_OFF
+    assert decision.reason is ExposureReason.RISK_OFF
+    assert decision.gross_target == 0.20
+
+
+def test_volatility_targeting_missing_history_never_adds_capacity():
+    decision = exposure_decision(
+        None,
+        enabled=True,
+        normal_max_gross=0.80,
+        risk_off_max_gross=0.20,
+        current_gross=0.42,
+        sma_window=200,
+        lookback_days=20,
+        target_annualized_vol=0.18,
+        risk_on_min_gross=0.60,
+        risk_on_max_gross=0.95,
+        realized_vol_floor=0.08,
+        realized_vol_ceiling=0.60,
+    )
+    assert decision.regime is MarketRegime.UNKNOWN
+    assert decision.reason is ExposureReason.FALLBACK_REGIME
+    assert decision.gross_target == 0.42
+
+
+def test_volatility_rebalance_closes_weakest_position_first():
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            if keys == ("risk", "volatility_targeting"):
+                return {"enabled": True, "rebalance_band_pct": 0.05}
+            if keys == ("risk", "benchmark_core"):
+                return {"symbol": "QQQ"}
+            return default
+
+    risk = RiskManager(DummyConfig(), broker=object(), state=object())
+    held = {
+        "WEAK": Position("WEAK", 450.0, 100.0, 45_000.0, 0.0),
+        "STRONG": Position("STRONG", 450.0, 100.0, 45_000.0, 0.0),
+    }
+    intents: list[TradeIntent] = []
+    risk._apply_exposure_trim_sells(
+        intents,
+        held,
+        scores={"WEAK": 0.10, "STRONG": 0.90},
+        equity=100_000.0,
+        exposure=ExposureDecision(
+            gross_target=0.60,
+            regime=MarketRegime.RISK_ON,
+            reason=ExposureReason.VOL_SCALED,
+            realized_vol=0.24,
+        ),
+    )
+    assert [intent.symbol for intent in intents] == ["WEAK"]
+    assert "volatility rebalance" in intents[0].reason
 
 
 def test_risk_state_tracks_portfolio_guard():

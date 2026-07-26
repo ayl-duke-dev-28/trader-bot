@@ -134,6 +134,23 @@ def _history_for_all(cfg: Config, symbols: list[str], held_symbols: list[str]) -
     return hist
 
 
+def _completed_session_history(
+    history: dict[str, pd.DataFrame],
+    market_timezone: str,
+) -> dict[str, pd.DataFrame]:
+    """Exclude the current session's incomplete daily bar from decisions."""
+    current_session = datetime.now(ZoneInfo(market_timezone)).date()
+    completed: dict[str, pd.DataFrame] = {}
+    for symbol, df in history.items():
+        if df is None or df.empty:
+            continue
+        mask = pd.Index(pd.to_datetime(df.index).date) < current_session
+        prior = df.loc[mask]
+        if not prior.empty:
+            completed[symbol] = prior
+    return completed
+
+
 def _apply_earnings_blackout(
     cfg: Config,
     intents: list[TradeIntent],
@@ -189,9 +206,13 @@ def trade_once(cfg: Config) -> None:
     if risk.apply_portfolio_drawdown_guard(dry_run=dry, mode=mode):
         return
 
-    scores = compute_signals(cfg, symbols, history=history)
+    market_timezone = str(cfg.get("schedule", "market_timezone", default=DEFAULT_MARKET_TZ))
+    decision_history = _completed_session_history(history, market_timezone)
+    scores = compute_signals(cfg, symbols, history=decision_history)
     prices = _last_prices(symbols)
-    intents = _consolidate_intents(risk.size_orders(scores, prices, history=history))
+    intents = _consolidate_intents(
+        risk.size_orders(scores, prices, history=decision_history)
+    )
     intents = _apply_earnings_blackout(cfg, intents)
 
     if not intents:

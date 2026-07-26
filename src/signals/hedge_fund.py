@@ -138,26 +138,36 @@ def _mean_reversion_vote(df: pd.DataFrame) -> AnalystVote:
 def _momentum_vote(df: pd.DataFrame) -> AnalystVote:
     close = df["close"]
     volume = df["volume"]
-    if len(close) < 130:
-        return _vote("momentum", 0.0, "not enough data for 1/3/6 month momentum")
+    if len(close) < 253:
+        return _vote("momentum", 0.0, "not enough data for institutional 3/6/12m trend")
 
-    returns = close.pct_change()
-    mom_1m = _latest(returns.rolling(21).sum())
-    mom_3m = _latest(returns.rolling(63).sum())
-    mom_6m = _latest(returns.rolling(126).sum())
+    returns = close.pct_change().dropna()
+    mom_3m = _safe(close.iloc[-1] / close.iloc[-64] - 1.0)
+    mom_6m = _safe(close.iloc[-1] / close.iloc[-127] - 1.0)
+    mom_12m = _safe(close.iloc[-1] / close.iloc[-253] - 1.0)
+    annualized_vol = _safe(returns.tail(60).std() * sqrt(252), default=0.25)
     volume_ratio = _latest(volume / volume.rolling(21).mean(), default=1.0)
 
-    raw_momentum = 0.4 * mom_1m + 0.3 * mom_3m + 0.3 * mom_6m
-    score = np.tanh(raw_momentum * 5)
+    # Managed-futures style trend: combine slow directional signs, then scale
+    # conviction by return relative to lagged realized volatility. The bot is
+    # long-only, so negative values act as an exit/avoid signal rather than a short.
+    direction = (
+        0.25 * np.sign(mom_3m)
+        + 0.25 * np.sign(mom_6m)
+        + 0.50 * np.sign(mom_12m)
+    )
+    risk_adjusted_strength = np.tanh(abs(mom_12m) / max(annualized_vol, 0.08))
+    score = direction * (0.5 + 0.5 * risk_adjusted_strength)
     if volume_ratio < 0.8:
         score *= 0.75
     elif volume_ratio > 1.2:
-        score *= 1.1
+        score *= 1.05
 
     return _vote(
         "momentum",
         score,
-        f"mom1m={mom_1m:.2%}, mom3m={mom_3m:.2%}, mom6m={mom_6m:.2%}, vol_ratio={volume_ratio:.2f}",
+        f"trend3m={mom_3m:.2%}, trend6m={mom_6m:.2%}, trend12m={mom_12m:.2%}, "
+        f"ann_vol60={annualized_vol:.1%}, vol_ratio={volume_ratio:.2f}",
     )
 
 

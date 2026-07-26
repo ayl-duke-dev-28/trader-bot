@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from math import floor
+from math import floor, isfinite
 from pathlib import Path
 from typing import Iterable
 
@@ -23,6 +23,7 @@ import pandas as pd
 from src.broker.alpaca_client import AlpacaBroker, Position
 from src.config import Config, ROOT
 from src.data.sectors import sector_for
+from src.risk.exposure import ExposureDecision, ExposureReason, MarketRegime, exposure_decision
 from src.risk.indicators import gap_pct, latest_atr_pct
 from src.risk.state import RiskState
 from src.trade_log import TradeLogEntry, TradeLogger
@@ -220,15 +221,25 @@ class RiskManager:
         equity = acct.equity
         max_pos_pct = float(self._r("max_position_pct", default=0.05))
         normal_max_gross_pct = float(self._r("max_gross_exposure", default=0.80))
-        max_gross_pct = self._regime_adjusted_max_gross_pct(history, normal_max_gross_pct)
+        held = {p.symbol: p for p in self.broker.positions()}
+        held_value = sum(p.market_value for p in held.values())
+        current_gross = held_value / equity if equity > 0 else 0.0
+        exposure = self._exposure_decision(history, normal_max_gross_pct, current_gross)
+        max_gross_pct = exposure.gross_target
+        log.info(
+            "exposure target=%.1f%% regime=%s reason=%s realized_vol=%s current=%.1f%%",
+            max_gross_pct * 100,
+            exposure.regime.value,
+            exposure.reason.value,
+            "n/a" if exposure.realized_vol is None else f"{exposure.realized_vol:.1%}",
+            current_gross * 100,
+        )
         max_positions = int(self._r("max_positions", default=20))
         entry_thr = float(self._r("entry_score_threshold", default=0.35))
         exit_thr = float(self._r("exit_score_threshold", default=0.0))
         gap_skip = float(self._r("gap_skip_pct", default=0.05))
         sector_caps = dict(self._r("sector_caps", default={}) or {})
 
-        held = {p.symbol: p for p in self.broker.positions()}
-        held_value = sum(p.market_value for p in held.values())
         max_per_position_dollars = equity * max_pos_pct
         remaining_gross = max(0.0, equity * max_gross_pct - held_value)
 
@@ -250,6 +261,14 @@ class RiskManager:
             held=held,
             max_gross_pct=max_gross_pct,
             normal_max_gross_pct=normal_max_gross_pct,
+            regime=exposure.regime,
+        )
+        self._apply_exposure_trim_sells(
+            intents=intents,
+            held=held,
+            scores=scores,
+            equity=equity,
+            exposure=exposure,
         )
 
         if self.state.portfolio_guard_tripped():
@@ -276,6 +295,7 @@ class RiskManager:
             max_gross_pct=max_gross_pct,
             normal_max_gross_pct=normal_max_gross_pct,
             open_slots=open_slots,
+            regime=exposure.regime,
         )
         if core_intent is not None:
             intents.append(core_intent)
@@ -335,6 +355,63 @@ class RiskManager:
 
         return intents
 
+    def _apply_exposure_trim_sells(
+        self,
+        intents: list[TradeIntent],
+        held: dict[str, Position],
+        scores: dict[str, float],
+        equity: float,
+        exposure: ExposureDecision,
+    ) -> None:
+        """Conservatively close weakest positions when the risk target falls.
+
+        Broker closes are whole-position operations in the current adapter, so
+        this first implementation may finish below the target rather than create
+        a partial-share sell that the execution path cannot faithfully submit.
+        """
+        vol_cfg = self._r("volatility_targeting", default={}) or {}
+        if not bool(vol_cfg.get("enabled", False)) or equity <= 0:
+            return
+
+        already_selling = {i.symbol for i in intents if i.side == "sell"}
+        projected_value = sum(
+            p.market_value for sym, p in held.items() if sym not in already_selling
+        )
+        band = (
+            0.0
+            if exposure.regime is MarketRegime.RISK_OFF
+            else float(vol_cfg.get("rebalance_band_pct", 0.05))
+        )
+        hard_ceiling = 0.95
+        projected_gross = projected_value / equity
+        if projected_gross <= exposure.gross_target + band and projected_gross <= hard_ceiling:
+            return
+
+        core_symbol = self._benchmark_core_symbol()
+
+        def rank(item: tuple[str, Position]) -> tuple[bool, float, str]:
+            sym, _ = item
+            score = scores.get(sym, float("-inf"))
+            finite_score = float(score) if isfinite(float(score)) else float("-inf")
+            return sym == core_symbol, finite_score, sym
+
+        for sym, position in sorted(
+            ((s, p) for s, p in held.items() if s not in already_selling),
+            key=rank,
+        ):
+            if projected_value / equity <= exposure.gross_target:
+                break
+            intents.append(
+                TradeIntent(
+                    sym,
+                    "sell",
+                    position.market_value,
+                    f"volatility rebalance target={exposure.gross_target:.1%} "
+                    f"regime={exposure.regime.value} reason={exposure.reason.value}",
+                )
+            )
+            projected_value -= position.market_value
+
     def _benchmark_core_cfg(self) -> dict:
         return self._r("benchmark_core", default={}) or {}
 
@@ -345,11 +422,18 @@ class RiskManager:
         self,
         max_gross_pct: float,
         normal_max_gross_pct: float,
+        regime: MarketRegime | None = None,
     ) -> float:
         core_cfg = self._benchmark_core_cfg()
         if not bool(core_cfg.get("enabled", False)):
             return 0.0
-        risk_on = max_gross_pct >= normal_max_gross_pct - 1e-9
+        # UNKNOWN preserves an existing core but cannot replenish it because the
+        # fallback exposure target releases no new capacity.
+        risk_on = (
+            regime is not MarketRegime.RISK_OFF
+            if regime is not None
+            else max_gross_pct >= normal_max_gross_pct - 1e-9
+        )
         key = "risk_on_target_pct" if risk_on else "risk_off_target_pct"
         return max(0.0, min(max_gross_pct, float(core_cfg.get(key, 0.0))))
 
@@ -359,6 +443,7 @@ class RiskManager:
         held: dict[str, Position],
         max_gross_pct: float,
         normal_max_gross_pct: float,
+        regime: MarketRegime | None = None,
     ) -> None:
         core_cfg = self._benchmark_core_cfg()
         if not bool(core_cfg.get("enabled", False)):
@@ -366,7 +451,7 @@ class RiskManager:
         symbol = self._benchmark_core_symbol()
         if symbol not in held:
             return
-        target_pct = self._benchmark_core_target_pct(max_gross_pct, normal_max_gross_pct)
+        target_pct = self._benchmark_core_target_pct(max_gross_pct, normal_max_gross_pct, regime)
         if target_pct > 0:
             return
         if any(i.symbol == symbol and i.side == "sell" for i in intents):
@@ -382,13 +467,14 @@ class RiskManager:
         max_gross_pct: float,
         normal_max_gross_pct: float,
         open_slots: int,
+        regime: MarketRegime | None = None,
     ) -> TradeIntent | None:
         core_cfg = self._benchmark_core_cfg()
         if not bool(core_cfg.get("enabled", False)):
             return None
 
         symbol = self._benchmark_core_symbol()
-        target_pct = self._benchmark_core_target_pct(max_gross_pct, normal_max_gross_pct)
+        target_pct = self._benchmark_core_target_pct(max_gross_pct, normal_max_gross_pct, regime)
         if target_pct <= 0:
             return None
         if symbol not in held_active and open_slots <= 0:
@@ -444,30 +530,45 @@ class RiskManager:
         history: dict[str, pd.DataFrame],
         normal_max_gross_pct: float,
     ) -> float:
+        return self._exposure_decision(history, normal_max_gross_pct, 0.0).gross_target
+
+    def _exposure_decision(
+        self,
+        history: dict[str, pd.DataFrame],
+        normal_max_gross_pct: float,
+        current_gross: float,
+    ) -> ExposureDecision:
         regime_cfg = self._r("market_regime", default={}) or {}
         if not bool(regime_cfg.get("enabled", False)):
-            return normal_max_gross_pct
+            return ExposureDecision(
+                normal_max_gross_pct,
+                MarketRegime.RISK_ON,
+                ExposureReason.DISABLED,
+                None,
+            )
 
         benchmark = str(regime_cfg.get("benchmark_symbol", "QQQ")).upper()
         window = int(regime_cfg.get("sma_window", 200))
         risk_off_max = float(regime_cfg.get("risk_off_max_gross_exposure", 0.0))
         hist = history.get(benchmark)
-        if hist is None or hist.empty or "close" not in hist.columns or len(hist) < window:
-            log.warning("market regime filter skipped: missing %d bars for %s", window, benchmark)
-            return normal_max_gross_pct
-
-        close = hist["close"].dropna()
-        sma = close.rolling(window).mean().iloc[-1]
-        last = close.iloc[-1]
-        if sma != sma or last >= sma:
-            return normal_max_gross_pct
-
-        adjusted = min(normal_max_gross_pct, risk_off_max)
-        log.info(
-            "risk-off regime: %s close %.2f < SMA%d %.2f; max gross %.0f%% -> %.0f%%",
-            benchmark, last, window, sma, normal_max_gross_pct * 100, adjusted * 100,
+        vol_cfg = self._r("volatility_targeting", default={}) or {}
+        decision = exposure_decision(
+            hist,
+            enabled=bool(vol_cfg.get("enabled", False)),
+            normal_max_gross=normal_max_gross_pct,
+            risk_off_max_gross=risk_off_max,
+            current_gross=current_gross,
+            sma_window=window,
+            lookback_days=int(vol_cfg.get("lookback_days", 20)),
+            target_annualized_vol=float(vol_cfg.get("target_annualized_vol", 0.18)),
+            risk_on_min_gross=float(vol_cfg.get("risk_on_min_gross_exposure", 0.60)),
+            risk_on_max_gross=float(vol_cfg.get("risk_on_max_gross_exposure", 0.95)),
+            realized_vol_floor=float(vol_cfg.get("realized_vol_floor", 0.08)),
+            realized_vol_ceiling=float(vol_cfg.get("realized_vol_ceiling", 0.60)),
         )
-        return adjusted
+        if decision.regime is MarketRegime.UNKNOWN and not bool(vol_cfg.get("enabled", False)):
+            log.warning("market regime filter skipped: missing %d bars for %s", window, benchmark)
+        return decision
 
     # --- utils ------------------------------------------------------------
 
