@@ -13,7 +13,6 @@ import pandas as pd
 
 from src.config import Config
 from src.data.sectors import sector_for
-from src.risk.exposure import ExposureDecision, ExposureReason, MarketRegime, exposure_decision
 from src.risk.indicators import gap_pct, latest_atr_pct
 from src.signals.classical import classical_signal
 from src.signals.hedge_fund import hedge_fund_decision
@@ -73,48 +72,24 @@ def _regime_adjusted_max_gross_pct(
     date: pd.Timestamp,
     normal_max_gross_pct: float,
 ) -> float:
-    return _exposure_decision_at(
-        cfg, history, date, normal_max_gross_pct, current_gross=0.0
-    ).gross_target
-
-
-def _exposure_decision_at(
-    cfg: Config,
-    history: dict[str, pd.DataFrame],
-    date: pd.Timestamp,
-    normal_max_gross_pct: float,
-    current_gross: float,
-) -> ExposureDecision:
     regime_cfg = _cfg_r(cfg, "market_regime", default={}) or {}
     if not bool(regime_cfg.get("enabled", False)):
-        return ExposureDecision(
-            normal_max_gross_pct,
-            MarketRegime.RISK_ON,
-            ExposureReason.DISABLED,
-            None,
-        )
+        return normal_max_gross_pct
 
     benchmark = str(regime_cfg.get("benchmark_symbol", "QQQ")).upper()
     window = int(regime_cfg.get("sma_window", 200))
     risk_off_max = float(regime_cfg.get("risk_off_max_gross_exposure", 0.0))
     hist = history.get(benchmark)
-    # Decisions made on date t use only completed sessions before t.
-    prior_hist = None if hist is None else hist.loc[hist.index < date]
-    vol_cfg = _cfg_r(cfg, "volatility_targeting", default={}) or {}
-    return exposure_decision(
-        prior_hist,
-        enabled=bool(vol_cfg.get("enabled", False)),
-        normal_max_gross=normal_max_gross_pct,
-        risk_off_max_gross=risk_off_max,
-        current_gross=current_gross,
-        sma_window=window,
-        lookback_days=int(vol_cfg.get("lookback_days", 20)),
-        target_annualized_vol=float(vol_cfg.get("target_annualized_vol", 0.18)),
-        risk_on_min_gross=float(vol_cfg.get("risk_on_min_gross_exposure", 0.60)),
-        risk_on_max_gross=float(vol_cfg.get("risk_on_max_gross_exposure", 0.95)),
-        realized_vol_floor=float(vol_cfg.get("realized_vol_floor", 0.08)),
-        realized_vol_ceiling=float(vol_cfg.get("realized_vol_ceiling", 0.60)),
-    )
+    if hist is None or hist.empty or "close" not in hist.columns:
+        return normal_max_gross_pct
+
+    close = hist.loc[:date]["close"].dropna()
+    if len(close) < window:
+        return normal_max_gross_pct
+    sma = close.rolling(window).mean().iloc[-1]
+    if sma != sma or close.iloc[-1] >= sma:
+        return normal_max_gross_pct
+    return min(normal_max_gross_pct, risk_off_max)
 
 
 def _benchmark_core_cfg(cfg: Config) -> dict:
@@ -129,18 +104,11 @@ def _benchmark_core_target_pct(
     cfg: Config,
     max_gross_pct: float,
     normal_max_gross_pct: float,
-    regime: MarketRegime | None = None,
 ) -> float:
     core_cfg = _benchmark_core_cfg(cfg)
     if not bool(core_cfg.get("enabled", False)):
         return 0.0
-    # UNKNOWN preserves an existing core but cannot replenish it because the
-    # fallback exposure target releases no new capacity.
-    risk_on = (
-        regime is not MarketRegime.RISK_OFF
-        if regime is not None
-        else max_gross_pct >= normal_max_gross_pct - 1e-9
-    )
+    risk_on = max_gross_pct >= normal_max_gross_pct - 1e-9
     key = "risk_on_target_pct" if risk_on else "risk_off_target_pct"
     return max(0.0, min(max_gross_pct, float(core_cfg.get(key, 0.0))))
 
@@ -283,17 +251,15 @@ def _precompute_hedge_fund_scores(cfg: Config, history: dict[str, pd.DataFrame],
         mean_rev[n < 55] = 0.0
 
         returns = close.pct_change()
-        mom_3m = close.pct_change(63)
-        mom_6m = close.pct_change(126)
-        mom_12m = close.pct_change(252)
-        annualized_vol60 = returns.rolling(60).std() * sqrt(252)
+        mom_1m = returns.rolling(21).sum()
+        mom_3m = returns.rolling(63).sum()
+        mom_6m = returns.rolling(126).sum()
         volume_ratio = (volume / volume.rolling(21).mean()).fillna(1.0)
-        direction = 0.25 * np.sign(mom_3m) + 0.25 * np.sign(mom_6m) + 0.50 * np.sign(mom_12m)
-        strength = np.tanh(mom_12m.abs() / annualized_vol60.clip(lower=0.08))
-        momentum = direction * (0.5 + 0.5 * strength)
-        momentum *= np.where(volume_ratio < 0.8, 0.75, np.where(volume_ratio > 1.2, 1.05, 1.0))
+        raw_momentum = 0.4 * mom_1m + 0.3 * mom_3m + 0.3 * mom_6m
+        momentum = pd.Series(np.tanh(raw_momentum * 5), index=df.index)
+        momentum *= np.where(volume_ratio < 0.8, 0.75, np.where(volume_ratio > 1.2, 1.1, 1.0))
         momentum = _clip_series(momentum)
-        momentum[n < 253] = 0.0
+        momentum[n < 130] = 0.0
 
         daily_vol = returns.rolling(60).std().fillna(0.025)
         annualized_vol = daily_vol * sqrt(252)
@@ -539,20 +505,9 @@ def simulate_current_bot(
             }
             scores = _score_snapshot(cfg, prior_history, active_bundle)
 
-        held_before_exits = sum(
-            pos.market_value(price)
-            for sym, pos in positions.items()
-            if (price := price_on(sym, date)) is not None
-        )
-        current_gross = held_before_exits / current_equity if current_equity > 0 else 0.0
-        exposure = _exposure_decision_at(
-            cfg, history, date, max_gross_pct, current_gross=current_gross
-        )
-        adjusted_max_gross_pct = exposure.gross_target
+        adjusted_max_gross_pct = _regime_adjusted_max_gross_pct(cfg, history, date, max_gross_pct)
         core_symbol = _benchmark_core_symbol(cfg)
-        core_target_pct = _benchmark_core_target_pct(
-            cfg, adjusted_max_gross_pct, max_gross_pct, exposure.regime
-        )
+        core_target_pct = _benchmark_core_target_pct(cfg, adjusted_max_gross_pct, max_gross_pct)
         if core_target_pct <= 0 and core_symbol in positions:
             price = price_on(core_symbol, date)
             if price is not None:
@@ -573,57 +528,6 @@ def simulate_current_bot(
                 highwater.pop(sym, None)
                 log_trade(date, "SELL", sym, pos.qty, price, score, f"score={score:+.2f} <= exit_thr={exit_thr:+.2f}")
 
-        vol_cfg = _cfg_r(cfg, "volatility_targeting", default={}) or {}
-        if bool(vol_cfg.get("enabled", False)):
-            current_equity = equity_on(date)
-            projected_value = sum(
-                pos.market_value(price)
-                for sym, pos in positions.items()
-                if (price := price_on(sym, date)) is not None
-            )
-            band = (
-                0.0
-                if exposure.regime is MarketRegime.RISK_OFF
-                else float(vol_cfg.get("rebalance_band_pct", 0.05))
-            )
-            if (
-                current_equity > 0
-                and (
-                    projected_value / current_equity > adjusted_max_gross_pct + band
-                    or projected_value / current_equity > 0.95
-                )
-            ):
-                ranked = sorted(
-                    positions,
-                    key=lambda sym: (
-                        sym == core_symbol,
-                        float(scores.get(sym, float("-inf"))),
-                        sym,
-                    ),
-                )
-                for sym in ranked:
-                    if projected_value / current_equity <= adjusted_max_gross_pct:
-                        break
-                    pos = positions.get(sym)
-                    price = price_on(sym, date)
-                    if pos is None or price is None:
-                        continue
-                    value = pos.market_value(price)
-                    cash += value * (1.0 - cost_bps / 10_000.0)
-                    positions.pop(sym, None)
-                    highwater.pop(sym, None)
-                    projected_value -= value
-                    log_trade(
-                        date,
-                        "REBALANCE",
-                        sym,
-                        pos.qty,
-                        price,
-                        scores.get(sym),
-                        f"volatility target={adjusted_max_gross_pct:.1%} "
-                        f"regime={exposure.regime.value} reason={exposure.reason.value}",
-                    )
-
         current_equity = equity_on(date)
         held_value = 0.0
         for sym, pos in positions.items():
@@ -636,9 +540,7 @@ def simulate_current_bot(
         sector_used = _count_by_sector(list(positions))
 
         core_cfg = _benchmark_core_cfg(cfg)
-        core_target_pct = _benchmark_core_target_pct(
-            cfg, adjusted_max_gross_pct, max_gross_pct, exposure.regime
-        )
+        core_target_pct = _benchmark_core_target_pct(cfg, adjusted_max_gross_pct, max_gross_pct)
         core_price = price_on(core_symbol, date)
         core_blackout = _near_earnings_at(earnings_calendar, core_symbol, date, earnings_blackout_days)
         if core_target_pct > 0 and core_price is not None and not core_blackout and (core_symbol in positions or open_slots > 0):
@@ -775,7 +677,6 @@ def simulate_current_bot(
         "buys": int((trades["action"] == "BUY").sum()) if not trades.empty else 0,
         "sells": int((trades["action"] == "SELL").sum()) if not trades.empty else 0,
         "stops": int((trades["action"] == "STOP").sum()) if not trades.empty else 0,
-        "rebalances": int((trades["action"] == "REBALANCE").sum()) if not trades.empty else 0,
         "closed_win_rate": float(wins / max(1, wins + losses)),
         "open_positions": int(len(positions)),
         "symbols": int(len(history)),
