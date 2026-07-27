@@ -298,12 +298,18 @@ def run_loop(cfg: Config) -> None:
     first_run = str(cfg.get("schedule", "first_run_et", default="09:30"))
     last_run = str(cfg.get("schedule", "last_run_et", default="15:30"))
     tz_name = str(cfg.get("schedule", "market_timezone", default=DEFAULT_MARKET_TZ))
+    max_start_delay_seconds = max(
+        0,
+        int(cfg.get("schedule", "max_start_delay_seconds", default=300)),
+    )
     log.info(
-        "starting trader loop on %s weekdays from %s to %s every %d minutes",
+        "starting trader loop on %s weekdays from %s to %s every %d minutes "
+        "(late-cycle grace=%ds)",
         tz_name,
         first_run,
         last_run,
         interval_min,
+        max_start_delay_seconds,
     )
     while True:
         next_run = _next_scheduled_run(
@@ -316,7 +322,22 @@ def run_loop(cfg: Config) -> None:
         sleep_seconds = max(0.0, (next_run - datetime.now(ZoneInfo(tz_name))).total_seconds())
         log.info("next trade check scheduled for %s", next_run.strftime("%Y-%m-%d %H:%M:%S %Z"))
         time.sleep(sleep_seconds)
+        woke_at = datetime.now(ZoneInfo(tz_name))
+        lateness = max(0.0, (woke_at - next_run).total_seconds())
+        if lateness > max_start_delay_seconds:
+            log.warning(
+                "missed scheduled trade check %s by %.0fs; skipping stale cycle "
+                "(machine may have slept)",
+                next_run.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                lateness,
+            )
+            continue
         try:
+            log.info(
+                "running scheduled trade check %s (start delay %.2fs)",
+                next_run.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                lateness,
+            )
             trade_once(cfg)
         except Exception:
             log.exception("trade cycle failed; continuing")

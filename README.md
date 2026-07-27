@@ -109,10 +109,17 @@ schedule:
   first_run_et: "09:30"
   last_run_et: "15:30"
   run_interval_minutes: 60
+  prevent_system_sleep: true
+  max_start_delay_seconds: 300
 ```
 
 Each scheduled cycle still checks Alpaca's market clock before trading, so
 holidays, weekends, and unexpected closures are skipped safely.
+
+On macOS, the runner starts an idle-sleep assertion while it is active. Closing
+the laptop lid or manually sleeping the Mac can still suspend it. If a wake-up
+occurs more than five minutes after a slot, the stale cycle is skipped and the
+next scheduled slot is used.
 
 ## Backtesting
 

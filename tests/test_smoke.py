@@ -190,7 +190,12 @@ def test_benchmark_core_buy_targets_configured_sleeve():
     class DummyBroker:
         pass
 
-    risk = RiskManager(DummyConfig(), DummyBroker(), state=object())
+    class DummyState:
+        @staticmethod
+        def in_cooldown(symbol):
+            return False
+
+    risk = RiskManager(DummyConfig(), DummyBroker(), state=DummyState())
     intent = risk._benchmark_core_buy(
         held_active={},
         prices={"QQQ": 100.0},
@@ -203,6 +208,37 @@ def test_benchmark_core_buy_targets_configured_sleeve():
     assert intent is not None
     assert intent.symbol == "QQQ"
     assert intent.target_dollars == 30_000.0
+
+
+def test_benchmark_core_honors_stop_cooldown():
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            if keys == ("risk", "benchmark_core"):
+                return {
+                    "enabled": True,
+                    "symbol": "QQQ",
+                    "risk_on_target_pct": 0.50,
+                    "risk_off_target_pct": 0.0,
+                    "min_trade_dollars": 500,
+                }
+            return default
+
+    class CooldownState:
+        @staticmethod
+        def in_cooldown(symbol):
+            return symbol == "QQQ"
+
+    risk = RiskManager(DummyConfig(), broker=object(), state=CooldownState())
+    intent = risk._benchmark_core_buy(
+        held_active={},
+        prices={"QQQ": 680.0},
+        equity=100_000.0,
+        remaining_gross=80_000.0,
+        max_gross_pct=0.8,
+        normal_max_gross_pct=0.8,
+        open_slots=1,
+    )
+    assert intent is None
 
 
 def test_relative_strength_blocks_lagging_symbol():
@@ -335,6 +371,7 @@ if __name__ == "__main__":
     test_market_regime_reduces_gross_exposure()
     test_risk_state_tracks_portfolio_guard()
     test_benchmark_core_buy_targets_configured_sleeve()
+    test_benchmark_core_honors_stop_cooldown()
     test_relative_strength_blocks_lagging_symbol()
     test_backtest_uses_live_path_benchmark_core()
     test_next_scheduled_run_uses_market_hours_et()

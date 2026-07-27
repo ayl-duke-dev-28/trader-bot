@@ -463,6 +463,8 @@ def simulate_current_bot(
             })
             continue
 
+        exited_this_cycle: set[str] = set()
+
         # Stop-loss and trailing exits are evaluated before new entries.
         for sym, pos in list(positions.items()):
             price = price_on(sym, date)
@@ -488,6 +490,7 @@ def simulate_current_bot(
                 cooldown_until[sym] = date + timedelta(days=cooldown_days)
                 positions.pop(sym, None)
                 highwater.pop(sym, None)
+                exited_this_cycle.add(sym)
                 log_trade(date, "STOP", sym, pos.qty, price, None, reason)
 
         if score_cache:
@@ -526,6 +529,7 @@ def simulate_current_bot(
                 cash += pos.qty * price * (1.0 - cost_bps / 10_000.0)
                 positions.pop(sym, None)
                 highwater.pop(sym, None)
+                exited_this_cycle.add(sym)
                 log_trade(date, "SELL", sym, pos.qty, price, score, f"score={score:+.2f} <= exit_thr={exit_thr:+.2f}")
 
         current_equity = equity_on(date)
@@ -543,7 +547,18 @@ def simulate_current_bot(
         core_target_pct = _benchmark_core_target_pct(cfg, adjusted_max_gross_pct, max_gross_pct)
         core_price = price_on(core_symbol, date)
         core_blackout = _near_earnings_at(earnings_calendar, core_symbol, date, earnings_blackout_days)
-        if core_target_pct > 0 and core_price is not None and not core_blackout and (core_symbol in positions or open_slots > 0):
+        core_cooldown = cooldown_until.get(core_symbol)
+        core_blocked = (
+            core_symbol in exited_this_cycle
+            or (core_cooldown is not None and date < core_cooldown)
+        )
+        if (
+            core_target_pct > 0
+            and core_price is not None
+            and not core_blackout
+            and not core_blocked
+            and (core_symbol in positions or open_slots > 0)
+        ):
             existing = positions[core_symbol].market_value(core_price) if core_symbol in positions else 0.0
             target = min(current_equity * core_target_pct, current_equity * adjusted_max_gross_pct)
             delta = min(max(0.0, target - existing), remaining_gross)

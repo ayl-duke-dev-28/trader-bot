@@ -268,15 +268,20 @@ class RiskManager:
         sector_used = _count_by_sector(held_active.keys())
         open_slots = max(0, max_positions - len(held_active))
 
-        core_intent = self._benchmark_core_buy(
-            held_active=held_active,
-            prices=prices,
-            equity=equity,
-            remaining_gross=remaining_gross,
-            max_gross_pct=max_gross_pct,
-            normal_max_gross_pct=normal_max_gross_pct,
-            open_slots=open_slots,
-        )
+        core_symbol = self._benchmark_core_symbol()
+        core_intent = None
+        if core_symbol in symbols_to_sell:
+            log.info("[SKIP] benchmark core %s has a sell intent this cycle", core_symbol)
+        else:
+            core_intent = self._benchmark_core_buy(
+                held_active=held_active,
+                prices=prices,
+                equity=equity,
+                remaining_gross=remaining_gross,
+                max_gross_pct=max_gross_pct,
+                normal_max_gross_pct=normal_max_gross_pct,
+                open_slots=open_slots,
+            )
         if core_intent is not None:
             intents.append(core_intent)
             remaining_gross -= core_intent.target_dollars
@@ -390,6 +395,9 @@ class RiskManager:
         symbol = self._benchmark_core_symbol()
         target_pct = self._benchmark_core_target_pct(max_gross_pct, normal_max_gross_pct)
         if target_pct <= 0:
+            return None
+        if self.state.in_cooldown(symbol):
+            log.info("[SKIP] benchmark core %s in cooldown", symbol)
             return None
         if symbol not in held_active and open_slots <= 0:
             return None
