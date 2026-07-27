@@ -1,27 +1,38 @@
 # trader-bot
 
-Free-tier Alpaca trading bot for paper/live Alpaca accounts.
+Long-only Alpaca trading bot with paper/live execution, scheduled intraday
+checks, persistent risk controls, and live-path historical backtesting.
 
-Current configured strategy:
+The repository is paper-first: `config.yaml` currently uses `mode: paper` and
+`dry_run: false`. Live mode requires separate live Alpaca credentials and a
+typed `YES` confirmation at startup.
 
-- **Hedge-fund ensemble** — enabled; multi-analyst scoring path.
-- **Classical quant signals** — enabled; momentum, mean-reversion, MA-cross,
-  RSI, and MACD.
-- **ML direction prediction** — enabled; XGBoost model at
-  `models/xgb_direction.joblib`.
+## Effective strategy
+
+The configured signal path is:
+
+- **Hedge-fund ensemble** — enabled and therefore authoritative. It combines
+  trend, mean-reversion, momentum, volatility-regime, statistical, and ML votes.
+- **ML direction prediction** — enabled inside the ensemble. The configured
+  XGBoost model at `models/xgb_direction.joblib` predicts the direction five
+  trading sessions ahead and returns a neutral vote when its up-probability is
+  between `0.45` and `0.55`.
 - **Benchmark-aware risk layer** — enabled; keeps a `QQQ` core sleeve in
   risk-on regimes and requires individual names to beat `QQQ`.
-- **Momentum breakout** — present in code but disabled in `config.yaml`.
-- **Politician trade tracker** — present in code but disabled in `config.yaml`.
-
-Built **paper-first, live-ready**: `mode: paper` is the current default, while
-live trading requires live Alpaca keys, `mode: live`, and a typed `YES`
-confirmation before orders are submitted.
+- **Momentum breakout** — implemented but disabled. Enabling it replaces the
+  ensemble output with the breakout ranking.
+- **Classical weighted blend** — configured but bypassed while the hedge-fund
+  ensemble is enabled. It becomes the fallback signal path if the ensemble is
+  disabled.
+- **Politician disclosures** — implemented but disabled. Their configured
+  weight is only used by the fallback weighted blend.
 
 ## Current State
 
 - Mode: `paper`
+- Dry run: disabled
 - Universe: `src/data/tech_universe.txt`, capped at `250` symbols
+- Execution: whole-share buys; fractional shares disabled
 - Position sizing: max `5%` per position, max `80%` gross exposure, max `20`
   positions
 - Signal thresholds: enter at `0.55` or higher; exit when the score reaches
@@ -31,6 +42,10 @@ confirmation before orders are submitted.
 - Relative strength: enabled versus `QQQ` over `63` trading days
 - Daily loss kill switch: `3%`
 - Stops: ATR-scaled, floored at `4%`, capped at `12%`
+- Trailing lock: arms at an `8%` gain and exits after a `4%` giveback
+- Stop cooldown: `3` days
+- Entry filters: skip buys within `3` days of earnings; gap protection at `5%`
+- Portfolio drawdown guard: implemented but disabled
 - Schedule: weekdays from `09:30` through `15:30` ET, hourly
 
 ## Approved Next Experiment — volatility-targeted exposure
@@ -51,19 +66,30 @@ for the formula, order-accounting rules, safeguards, and acceptance criteria.
 
 ## Setup — native Python
 
+Requires Python 3.11 or newer.
+
 ```bash
-cd ~/Documents/Projects/trader-bot
+cd /path/to/trader-bot
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 cp .env.example .env
 # edit .env with your paper keys from https://app.alpaca.markets/paper/dashboard/overview
 ```
 
+<!-- AUTO-GENERATED: environment variables from .env.example -->
+| Variable | Required | Used for |
+| --- | --- | --- |
+| `ALPACA_API_KEY` | Yes | Paper trading and commands that load broker-backed configuration |
+| `ALPACA_API_SECRET` | Yes | Paper trading and commands that load broker-backed configuration |
+| `ALPACA_LIVE_API_KEY` | Live mode only | Live trading |
+| `ALPACA_LIVE_API_SECRET` | Live mode only | Live trading |
+<!-- END AUTO-GENERATED -->
+
 ## Setup — Docker (recommended for deploy)
 
 ```bash
-cd ~/Documents/Projects/trader-bot
+cd /path/to/trader-bot
 cp .env.example .env       # then edit with your Alpaca paper keys
 docker compose build
 docker compose run --rm trader python scripts/train_models.py
@@ -75,21 +101,21 @@ To deploy on a free Oracle Cloud VM see [docs/ORACLE_DEPLOY.md](docs/ORACLE_DEPL
 
 ## Usage
 
-```bash
-# 1. Walk-forward backtest (no broker connection needed)
-python scripts/backtest.py
-
-# 2. Train the ML model on the configured universe
-python scripts/train_models.py
-
-# 3. Inspect recent politician disclosures
-python scripts/politicians_analyze.py
-
-# 4. Start the paper trading loop
-python scripts/run_paper.py
-```
+<!-- AUTO-GENERATED: commands from scripts/ and tests/ -->
+| Command | Description | Alpaca keys required |
+| --- | --- | --- |
+| `python scripts/backtest.py` | Run the primary live-path backtest; walk-forward ML is on by default | No |
+| `python scripts/simulate_backtest.py` | Run the simpler current-decision simulator without walk-forward retraining | No |
+| `python scripts/train_models.py` | Download the configured training history and write the XGBoost model | Yes |
+| `python scripts/politicians_analyze.py` | Fetch and rank recent politician disclosures | Yes, because it loads the broker-backed configuration |
+| `python scripts/run_paper.py` | Start the scheduled paper/live trading loop | Yes |
+| `python tests/test_smoke.py` | Run the offline smoke tests | No |
+<!-- END AUTO-GENERATED -->
 
 (In Docker: prefix any of these with `docker compose run --rm trader`.)
+
+The model file is ignored by Git. Train it before relying on the ML vote; if the
+file is absent, ML contributes a neutral vote.
 
 ## Trading schedule
 
@@ -134,15 +160,30 @@ When ML is enabled, the backtester does **not** use a single model trained on th
 full dataset. It trains ML only on rolling prior windows and tests only the
 immediately following window.
 
-Useful options:
+`scripts/backtest.py` options:
+
+<!-- AUTO-GENERATED: options from scripts/backtest.py -->
+| Option | Default | Purpose |
+| --- | ---: | --- |
+| `--years` | `5` | Simulation length in calendar years |
+| `--start-capital` | `100000` | Starting cash |
+| `--cost-bps` | `5` | Per-trade cost assumption in basis points |
+| `--max-symbols` | all configured | Limit the universe for a faster run |
+| `--out-dir` | timestamped directory | Select the report directory |
+| `--train-window-days` | `756` | Override the walk-forward ML training window |
+| `--test-window-days` | `63` | Override the walk-forward ML test window |
+| `--no-walk-forward` | off | Reuse the saved model instead of retraining rolling prior windows |
+<!-- END AUTO-GENERATED -->
+
+For example:
 
 ```bash
 python scripts/backtest.py --years 5 --out-dir reports/backtests/walk_forward_5y
 python scripts/backtest.py --years 20 --out-dir reports/backtests/walk_forward_20y
-python scripts/backtest.py --years 1 --out-dir reports/backtests/daily_metrics_1y_qqq
+python scripts/backtest.py --years 1 --max-symbols 50
 ```
 
-Backtest reports include daily P/L diagnostics in addition to total return,
+New backtest reports include daily P/L diagnostics in addition to total return,
 Sharpe, and max drawdown:
 
 - `profit_days`, `loss_days`, `flat_days`
@@ -190,19 +231,23 @@ Important local/generated files:
 - `logs/trader.log` — runtime log; ignored by git
 - `logs/trades.xlsx` — trade activity workbook; ignored by git
 - `models/xgb_direction.joblib` — trained ML artifact; ignored by git
-- `data_cache/` — recreated on demand by yfinance fetches; ignored by git
-- `.venv/` — local Python environment; ignored by git and currently absent after cleanup
+- `data_cache/` — yfinance cache plus persisted risk state; ignored by git
+- `.venv/` — local Python environment; ignored by git
 
 ## Trade activity log
 
-Every buy, sell, stop-loss close, skip, and dry-run intent is appended to an Excel
-file so you can review *why* each trade was made after the fact.
+Broker-facing buys, sells, stop-loss closes, dry-run intents, failures, and
+selected execution skips are appended to an Excel file so you can review why an
+order was or was not submitted.
 
 - Default path: `logs/trades.xlsx` (configurable via `logging.trades_file` in `config.yaml`).
 - Columns: `timestamp, mode, action, symbol, qty, price, target_dollars, score, reason, order_id`.
 - Actions: `BUY`, `SELL`, `STOP` (stop-loss / trailing lock), `SKIP`, `DRY`, `FAIL`.
 - The `reason` column carries the exact signal/sizing/stop trigger (e.g. `score=+0.42 sector=tech`, `stop pl=-6.20% vs -4.00%`).
 - The file is created on the first logged action — until then it won't exist on disk.
+
+Market-closed cycles, earnings-blackout exclusions, and cycles with no intents
+are written to `logs/trader.log`, not to the Excel activity log.
 
 ## Going live
 
@@ -229,6 +274,8 @@ docs/
                           approved volatility-targeting experiment design
 models/
   xgb_direction.joblib   trained ML model artifact (ignored)
+data_cache/
+  state/risk_state.json  day equity, stop cooldowns, and high-water marks (ignored)
 reports/backtests/
   benchmark_aware_5y/    current-strategy 5-year benchmark-aware run
   walk_forward_5y/       current-strategy 5-year walk-forward run
