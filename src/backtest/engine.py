@@ -34,6 +34,7 @@ class BacktestResult:
     trades: int
     trades_log: pd.DataFrame | None = None
     summary: dict[str, float | int | str] | None = None
+    equity_diagnostics: pd.DataFrame | None = None
 
 
 def _composite_score(cfg: Config, df: pd.DataFrame, bundle) -> float:
@@ -56,6 +57,8 @@ def backtest(
     walk_forward: bool = True,
     train_window_days: int | None = None,
     test_window_days: int | None = None,
+    macro_cycles: pd.DataFrame | None = None,
+    macro_cycle_config: dict[str, Any] | None = None,
 ) -> BacktestResult:
     """Replay the live bot's current decision path over historical daily bars."""
     if not history:
@@ -94,6 +97,8 @@ def backtest(
         cost_bps=cost_bps,
         earnings_calendar=earnings_calendar,
         model_provider=model_provider,
+        macro_cycles=macro_cycles,
+        macro_cycle_config=macro_cycle_config,
     )
     if walk_windows:
         result.summary["walk_forward_windows"] = len(walk_windows)
@@ -109,6 +114,7 @@ def backtest(
         trades=int(result.summary["trades"]),
         trades_log=result.trades,
         summary=result.summary,
+        equity_diagnostics=result.equity_curve,
     )
 
 

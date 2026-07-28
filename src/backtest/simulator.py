@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import Config
+from src.data.macro import macro_cycle_at, macro_exposure_cap
 from src.data.sectors import sector_for
 from src.risk.indicators import gap_pct, latest_atr_pct
 from src.signals.classical import classical_signal
@@ -335,6 +336,8 @@ def simulate_current_bot(
     earnings_calendar: dict[str, list[date_type | datetime | pd.Timestamp | str]] | None = None,
     model_bundle: dict[str, Any] | None = None,
     model_provider: Callable[[pd.Timestamp], dict[str, Any] | None] | None = None,
+    macro_cycles: pd.DataFrame | None = None,
+    macro_cycle_config: dict[str, Any] | None = None,
 ) -> SimulationResult:
     """Replay daily close-to-close decisions using the live bot's signal/risk rules."""
     if not history:
@@ -378,6 +381,8 @@ def simulate_current_bot(
     drawdown_guard_cfg = _cfg_r(cfg, "portfolio_drawdown_guard", default={}) or {}
     drawdown_guard_enabled = bool(drawdown_guard_cfg.get("enabled", False))
     drawdown_guard_max = float(drawdown_guard_cfg.get("max_drawdown_pct", 1.0))
+    macro_cfg = macro_cycle_config or {}
+    macro_enabled = bool(macro_cfg.get("enabled", False)) and macro_cycles is not None and not macro_cycles.empty
 
     cash = float(start_capital)
     positions: dict[str, SimPosition] = {}
@@ -509,6 +514,13 @@ def simulate_current_bot(
             scores = _score_snapshot(cfg, prior_history, active_bundle)
 
         adjusted_max_gross_pct = _regime_adjusted_max_gross_pct(cfg, history, date, max_gross_pct)
+        if macro_enabled:
+            adjusted_max_gross_pct = macro_exposure_cap(
+                macro_cycles,
+                date,
+                normal_max_gross=adjusted_max_gross_pct,
+                config=macro_cfg,
+            )
         core_symbol = _benchmark_core_symbol(cfg)
         core_target_pct = _benchmark_core_target_pct(cfg, adjusted_max_gross_pct, max_gross_pct)
         if core_target_pct <= 0 and core_symbol in positions:
@@ -639,12 +651,24 @@ def simulate_current_bot(
                 sector_used[sector] = sector_used.get(sector, 0) + 1
             log_trade(date, "BUY", sym, qty, price, score, f"score={score:+.2f} sector={sector}")
 
-        curve_rows.append({
+        curve_row = {
             "date": date.date().isoformat(),
             "equity": round(equity_on(date), 2),
             "cash": round(cash, 2),
             "positions": len(positions),
-        })
+            "max_gross_exposure": round(adjusted_max_gross_pct, 4),
+        }
+        if macro_enabled:
+            cycle = macro_cycle_at(macro_cycles, date)
+            curve_row.update(
+                {
+                    "macro_regime": "unknown" if cycle is None else str(cycle["regime"]),
+                    "macro_long_score": np.nan if cycle is None else cycle["long_score"],
+                    "macro_short_score": np.nan if cycle is None else cycle["short_score"],
+                    "macro_composite_score": np.nan if cycle is None else cycle["composite_score"],
+                }
+            )
+        curve_rows.append(curve_row)
 
     equity_curve = pd.DataFrame(curve_rows)
     trades = pd.DataFrame(trade_rows)
@@ -696,7 +720,19 @@ def simulate_current_bot(
         "open_positions": int(len(positions)),
         "symbols": int(len(history)),
         "cost_bps": float(cost_bps),
+        "macro_cycle_enabled": bool(macro_enabled),
     }
+    if macro_enabled:
+        macro_regimes = equity_curve["macro_regime"].fillna("unknown")
+        summary.update(
+            {
+                "macro_expansion_days": int((macro_regimes == "expansion").sum()),
+                "macro_neutral_days": int((macro_regimes == "neutral").sum()),
+                "macro_contraction_days": int((macro_regimes == "contraction").sum()),
+                "macro_unknown_days": int((macro_regimes == "unknown").sum()),
+                "macro_min_gross_exposure": float(equity_curve["max_gross_exposure"].min()),
+            }
+        )
     return SimulationResult(equity_curve=equity_curve, trades=trades, summary=summary)
 
 

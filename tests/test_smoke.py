@@ -348,6 +348,44 @@ def test_backtest_uses_live_path_benchmark_core():
     assert blocked.summary is not None
     assert blocked.summary["buys"] == 0
 
+    macro_cycles = pd.DataFrame(
+        {
+            "long_score": [-0.6],
+            "short_score": [-0.7],
+            "composite_score": [-0.64],
+            "regime": ["contraction"],
+        },
+        index=[idx[0]],
+    )
+    macro_limited = backtest(
+        DummyConfig(),
+        {"QQQ": qqq},
+        start_date=idx[60],
+        start_capital=100_000.0,
+        cost_bps=0.0,
+        macro_cycles=macro_cycles,
+        macro_cycle_config={
+            "enabled": True,
+            "neutral_max_gross_exposure": 0.60,
+            "contraction_max_gross_exposure": 0.30,
+        },
+    )
+    assert macro_limited.summary is not None
+    assert macro_limited.summary["macro_cycle_enabled"] is True
+    assert macro_limited.summary["macro_contraction_days"] > 0
+    assert macro_limited.summary["macro_min_gross_exposure"] == 0.30
+    assert macro_limited.summary["buys"] == 0
+    assert macro_limited.equity_diagnostics is not None
+    assert set(
+        {
+            "macro_regime",
+            "macro_long_score",
+            "macro_short_score",
+            "macro_composite_score",
+            "max_gross_exposure",
+        }
+    ).issubset(macro_limited.equity_diagnostics.columns)
+
 
 def test_next_scheduled_run_uses_market_hours_et():
     tz = ZoneInfo("America/New_York")

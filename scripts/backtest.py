@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.backtest.engine import backtest
 from src.backtest.simulator import SimulationResult, write_simulation_report
 from src.config import ROOT, load_config
+from src.data.macro import load_macro_panel, macro_cycle_history
 from src.data.market_data import get_history_many
 from src.data.universe import load_universe
 
@@ -30,6 +31,12 @@ def main() -> int:
     parser.add_argument("--train-window-days", type=int, default=None)
     parser.add_argument("--test-window-days", type=int, default=None)
     parser.add_argument("--no-walk-forward", action="store_true")
+    parser.add_argument(
+        "--macro-data",
+        type=Path,
+        default=None,
+        help="point-in-time macro panel CSV; enables the economic-cycle overlay",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -37,6 +44,24 @@ def main() -> int:
     symbols = load_universe(cfg)
     if args.max_symbols is not None:
         symbols = symbols[: args.max_symbols]
+
+    macro_cfg = dict(cfg.get("backtest", "macro_cycle", default={}) or {})
+    macro_data_path = args.macro_data
+    if macro_data_path is None and bool(macro_cfg.get("enabled", False)):
+        configured_path = macro_cfg.get("data_path")
+        macro_data_path = Path(configured_path) if configured_path else None
+    macro_cycles = None
+    if macro_data_path is not None:
+        if not macro_data_path.is_absolute():
+            macro_data_path = ROOT / macro_data_path
+        macro_cfg["enabled"] = True
+        macro_panel = load_macro_panel(macro_data_path)
+        macro_cycles = macro_cycle_history(macro_panel, macro_cfg)
+        log.info(
+            "loaded %d point-in-time macro observations from %s",
+            len(macro_cycles),
+            macro_data_path,
+        )
 
     sim_days = int(args.years * 365.25)
     warmup_days = int(cfg.get("backtest", "warmup_days", default=280))
@@ -58,6 +83,8 @@ def main() -> int:
         walk_forward=not args.no_walk_forward,
         train_window_days=args.train_window_days,
         test_window_days=args.test_window_days,
+        macro_cycles=macro_cycles,
+        macro_cycle_config=macro_cfg,
     )
 
     out_dir = args.out_dir
@@ -65,9 +92,14 @@ def main() -> int:
         stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         out_dir = ROOT / "reports" / "backtests" / f"live_path_{stamp}"
     if result.summary is not None and result.trades_log is not None:
+        report_curve = result.equity_diagnostics
+        if report_curve is None:
+            report_curve = result.equity_curve.rename("equity").reset_index().rename(
+                columns={"index": "date"}
+            )
         write_simulation_report(
             SimulationResult(
-                equity_curve=result.equity_curve.rename("equity").reset_index().rename(columns={"index": "date"}),
+                equity_curve=report_curve,
                 trades=result.trades_log,
                 summary=result.summary,
             ),

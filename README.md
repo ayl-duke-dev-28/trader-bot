@@ -26,6 +26,9 @@ The configured signal path is:
   disabled.
 - **Politician disclosures** — implemented but disabled. Their configured
   weight is only used by the fallback weighted blend.
+- **Economic-cycle overlay** — implemented for backtests but disabled by
+  default. It combines growth, inflation, unemployment, and interest rates into
+  separate long- and short-cycle scores and can only reduce gross exposure.
 
 ## Current State
 
@@ -84,6 +87,7 @@ cp .env.example .env
 | `ALPACA_API_SECRET` | Yes | Paper trading and commands that load broker-backed configuration |
 | `ALPACA_LIVE_API_KEY` | Live mode only | Live trading |
 | `ALPACA_LIVE_API_SECRET` | Live mode only | Live trading |
+| `FRED_API_KEY` | Macro download only | Initial-release economic data from FRED |
 <!-- END AUTO-GENERATED -->
 
 ## Setup — Docker (recommended for deploy)
@@ -105,6 +109,7 @@ To deploy on a free Oracle Cloud VM see [docs/ORACLE_DEPLOY.md](docs/ORACLE_DEPL
 | Command | Description | Alpaca keys required |
 | --- | --- | --- |
 | `python scripts/backtest.py` | Run the primary live-path backtest; walk-forward ML is on by default | No |
+| `python scripts/fetch_macro_data.py` | Download point-in-time initial-release macro history from FRED | No Alpaca keys; requires `FRED_API_KEY` |
 | `python scripts/simulate_backtest.py` | Run the simpler current-decision simulator without walk-forward retraining | No |
 | `python scripts/train_models.py` | Download the configured training history and write the XGBoost model | Yes |
 | `python scripts/politicians_analyze.py` | Fetch and rank recent politician disclosures | Yes, because it loads the broker-backed configuration |
@@ -173,6 +178,7 @@ immediately following window.
 | `--train-window-days` | `756` | Override the walk-forward ML training window |
 | `--test-window-days` | `63` | Override the walk-forward ML test window |
 | `--no-walk-forward` | off | Reuse the saved model instead of retraining rolling prior windows |
+| `--macro-data` | off | Enable the economic-cycle overlay with a point-in-time macro CSV |
 <!-- END AUTO-GENERATED -->
 
 For example:
@@ -182,6 +188,44 @@ python scripts/backtest.py --years 5 --out-dir reports/backtests/walk_forward_5y
 python scripts/backtest.py --years 20 --out-dir reports/backtests/walk_forward_20y
 python scripts/backtest.py --years 1 --max-symbols 50
 ```
+
+### Economic-cycle overlay
+
+Add a free FRED API key to `.env`, download initial-release observations, then
+run the baseline and macro-aware variants against the same dates, universe, and
+cost assumptions:
+
+```bash
+python scripts/fetch_macro_data.py
+
+python scripts/backtest.py \
+  --years 20 \
+  --out-dir reports/backtests/baseline_20y
+
+python scripts/backtest.py \
+  --years 20 \
+  --macro-data data_cache/macro/fred_initial_releases.csv \
+  --out-dir reports/backtests/macro_cycles_20y
+```
+
+The four monthly inputs are:
+
+- growth: year-over-year industrial production (`INDPRO`);
+- inflation: year-over-year CPI (`CPIAUCSL`);
+- unemployment: U-3 unemployment rate (`UNRATE`);
+- interest rates: effective federal-funds rate (`FEDFUNDS`).
+
+The long-cycle score emphasizes levels over a rolling 120-month context. The
+short-cycle score measures six-month changes. In expansion the existing risk
+cap remains authoritative; neutral and contraction regimes cap gross exposure
+at `60%` and `30%` respectively. The QQQ market-regime cap can reduce exposure
+further.
+
+The downloader requests FRED's initial-release output and indexes every value by
+its historical availability date. Do not substitute a latest-revision FRED CSV:
+that would introduce revision and look-ahead bias. The equity report records
+the daily macro regime, both cycle scores, the composite score, and the applied
+gross-exposure cap.
 
 New backtest reports include daily P/L diagnostics in addition to total return,
 Sharpe, and max drawdown:
@@ -220,6 +264,7 @@ Important tracked files:
 - `docs/design-volatility-targeted-exposure.md` — approved, not-yet-implemented
   volatility-targeting experiment
 - `scripts/backtest.py` — live-path historical backtester
+- `scripts/fetch_macro_data.py` — downloads initial-release FRED macro history
 - `scripts/simulate_backtest.py` — simulation report runner
 - `scripts/train_models.py` — trains `models/xgb_direction.joblib`
 - `scripts/run_paper.py` — starts the scheduled paper/live loop
@@ -289,6 +334,7 @@ src/
   broker/alpaca_client.py
                           alpaca-py wrapper
   data/                  universe + cached yfinance fetcher
+  data/macro.py          point-in-time macro panel + cycle scoring
   signals/classical.py   technical-analysis composite signal
   signals/hedge_fund.py  current ensemble scoring path
   signals/ml.py          XGBoost direction model

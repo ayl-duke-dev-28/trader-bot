@@ -142,3 +142,20 @@ logging:
   level: INFO
   file: logs/trader.log
   trades_file: logs/trades.xlsx   # per-activity Excel log (buy/sell/stop/skip)
+
+backtest:
+  # Optional point-in-time macro overlay. It is backtest-only and never raises
+  # exposure above the existing market-regime cap.
+  macro_cycle:
+    enabled: false
+    data_path: data_cache/macro/fred_initial_releases.csv
+    long_window_months: 120
+    short_window_months: 6
+    min_history_months: 36
+    long_weight: 0.6
+    short_weight: 0.4
+    inflation_target_pct: 2.0
+    expansion_threshold: 0.20
+    contraction_threshold: -0.20
+    neutral_max_gross_exposure: 0.60
+    contraction_max_gross_exposure: 0.30
