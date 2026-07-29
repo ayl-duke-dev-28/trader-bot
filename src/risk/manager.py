@@ -25,6 +25,7 @@ from src.config import Config, ROOT
 from src.data.sectors import sector_for
 from src.risk.indicators import gap_pct, latest_atr_pct
 from src.risk.state import RiskState
+from src.risk.validation import is_valid_price
 from src.trade_log import TradeLogEntry, TradeLogger
 
 log = logging.getLogger(__name__)
@@ -300,7 +301,7 @@ class RiskManager:
                 log.info("[SKIP] %s in cooldown", sym)
                 continue
             price = prices.get(sym, 0.0)
-            if price <= 0:
+            if not is_valid_price(price):
                 continue
 
             if not self._passes_relative_strength(sym, history):
@@ -481,7 +482,7 @@ class RiskManager:
 
     @staticmethod
     def intent_to_qty(intent: TradeIntent, price: float, allow_fractional: bool = True) -> float:
-        if price <= 0:
+        if not is_valid_price(price):
             return 0.0
         qty = intent.target_dollars / price
         if not allow_fractional:

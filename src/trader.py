@@ -17,6 +17,7 @@ from src.data.market_data import get_history, get_history_many
 from src.data.universe import load_universe
 from src.politicians.tracker import politician_signals
 from src.risk.manager import RiskManager, TradeIntent
+from src.risk.validation import is_valid_price
 from src.signals.classical import classical_signal
 from src.signals.hedge_fund import hedge_fund_decision
 from src.signals.ml import load_model, ml_signal
@@ -74,9 +75,17 @@ def _last_prices(symbols: list[str]) -> dict[str, float]:
                     last = close.iloc[-1]
                     for s in symbols:
                         if s in last.index:
-                            out[s] = float(last[s])
+                            raw_price = last[s]
+                            if is_valid_price(raw_price):
+                                out[s] = float(raw_price)
+                            else:
+                                log.warning("invalid latest price for %s: %r", s, raw_price)
                 else:
-                    out[symbols[0]] = float(close.iloc[-1])
+                    raw_price = close.iloc[-1]
+                    if is_valid_price(raw_price):
+                        out[symbols[0]] = float(raw_price)
+                    else:
+                        log.warning("invalid latest price for %s: %r", symbols[0], raw_price)
     except Exception as e:
         log.warning("price fetch failed: %s", e)
     return out
@@ -161,6 +170,8 @@ def _execution_qty_price(
 ) -> tuple[float, float]:
     """Return execution qty/price estimate without blocking closes on quote misses."""
     price = prices.get(intent.symbol, 0.0)
+    if not is_valid_price(price):
+        price = 0.0
     if intent.side == "sell":
         position = positions.get(intent.symbol)
         if position is not None:

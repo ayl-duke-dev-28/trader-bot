@@ -5,6 +5,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -18,10 +19,11 @@ from src.signals.hedge_fund import hedge_fund_decision
 from src.signals.ml import build_features, build_training_set
 from src.signals.momentum_breakout import momentum_breakout_scores
 from src.backtest.engine import backtest
-from src.broker.alpaca_client import Position, _retry_request
+from src.broker.alpaca_client import Account, Position, _retry_request
 from src.risk.manager import RiskManager, TradeIntent
 from src.risk.state import RiskState
-from src.trader import _consolidate_intents, _execution_qty_price, _next_scheduled_run
+from src.risk.validation import is_valid_price
+from src.trader import _consolidate_intents, _execution_qty_price, _last_prices, _next_scheduled_run
 
 
 def _fake_df(n: int = 200) -> pd.DataFrame:
@@ -109,6 +111,82 @@ def test_intent_to_qty_whole_share_mode():
     assert RiskManager.intent_to_qty(intent, 390.99, allow_fractional=True) == 1.022
 
 
+def test_intent_to_qty_rejects_non_finite_prices():
+    intent = TradeIntent("BAD", "buy", 1_000.0, "score=0.80")
+    for price in (float("nan"), float("inf"), float("-inf")):
+        assert RiskManager.intent_to_qty(intent, price, allow_fractional=False) == 0.0
+        assert RiskManager.intent_to_qty(intent, price, allow_fractional=True) == 0.0
+
+
+def test_price_validation_rejects_non_numeric_and_non_positive_values():
+    assert is_valid_price(100.0)
+    assert not is_valid_price(None)
+    assert not is_valid_price("not-a-price")
+    assert not is_valid_price(0.0)
+    assert not is_valid_price(-1.0)
+    assert not is_valid_price(float("nan"))
+    assert not is_valid_price(float("inf"))
+
+
+def test_last_prices_drops_non_finite_quotes():
+    columns = pd.MultiIndex.from_product(
+        [["Close"], ["GOOD", "NAN", "INF", "ZERO", "MISSING", "TEXT"]]
+    )
+    download = pd.DataFrame(
+        [[100.0, float("nan"), float("inf"), 0.0, pd.NA, "bad"]],
+        columns=columns,
+        index=[pd.Timestamp("2026-07-29")],
+    )
+
+    with patch("src.trader.yf.download", return_value=download):
+        prices = _last_prices(["GOOD", "NAN", "INF", "ZERO", "MISSING", "TEXT"])
+
+    assert prices == {"GOOD": 100.0}
+
+
+def test_size_orders_skips_non_finite_quote():
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            values = {
+                ("risk", "market_regime"): {"enabled": False},
+                ("risk", "benchmark_core"): {"enabled": False},
+                ("risk", "relative_strength"): {"enabled": False},
+                ("risk", "portfolio_drawdown_guard"): {"enabled": False},
+            }
+            return values.get(keys, default)
+
+    class DummyBroker:
+        @staticmethod
+        def account():
+            return Account(100_000.0, 100_000.0, 100_000.0, 100_000.0)
+
+        @staticmethod
+        def positions():
+            return []
+
+    class DummyState:
+        @staticmethod
+        def portfolio_guard_tripped():
+            return False
+
+        @staticmethod
+        def day_start_equity(equity):
+            return equity
+
+        @staticmethod
+        def in_cooldown(symbol):
+            return False
+
+    risk = RiskManager(DummyConfig(), DummyBroker(), state=DummyState())
+    intents = risk.size_orders(
+        scores={"BAD": 0.80},
+        prices={"BAD": float("nan")},
+        history={},
+    )
+
+    assert intents == []
+
+
 def test_consolidate_duplicate_buy_intents():
     intents = [
         TradeIntent("MKSI", "buy", 390.99, "score=0.30"),
@@ -127,6 +205,29 @@ def test_sell_execution_uses_position_qty_when_quote_missing():
     qty, price = _execution_qty_price(intent, prices={}, positions={"C": position}, allow_fractional=False)
     assert qty == 25.0
     assert price == 85.0
+
+
+def test_execution_qty_rejects_nan_buy_and_falls_back_for_sell():
+    buy = TradeIntent("BAD", "buy", 1_000.0, "score=0.80")
+    buy_qty, buy_price = _execution_qty_price(
+        buy,
+        prices={"BAD": float("nan")},
+        positions={},
+        allow_fractional=False,
+    )
+    assert buy_qty == 0.0
+    assert buy_price == 0.0
+
+    sell = TradeIntent("BAD", "sell", 2_125.0, "score=0.00")
+    position = Position("BAD", qty=25.0, avg_entry_price=80.0, market_value=2_125.0, unrealized_plpc=0.05)
+    sell_qty, sell_price = _execution_qty_price(
+        sell,
+        prices={"BAD": float("nan")},
+        positions={"BAD": position},
+        allow_fractional=False,
+    )
+    assert sell_qty == 25.0
+    assert sell_price == 85.0
 
 
 def test_alpaca_read_retry_recovers_from_connection_reset():
@@ -403,8 +504,13 @@ if __name__ == "__main__":
     test_hedge_fund_signal_in_range()
     test_momentum_breakout_selects_top_prior_winner()
     test_intent_to_qty_whole_share_mode()
+    test_intent_to_qty_rejects_non_finite_prices()
+    test_price_validation_rejects_non_numeric_and_non_positive_values()
+    test_last_prices_drops_non_finite_quotes()
+    test_size_orders_skips_non_finite_quote()
     test_consolidate_duplicate_buy_intents()
     test_sell_execution_uses_position_qty_when_quote_missing()
+    test_execution_qty_rejects_nan_buy_and_falls_back_for_sell()
     test_alpaca_read_retry_recovers_from_connection_reset()
     test_market_regime_reduces_gross_exposure()
     test_risk_state_tracks_portfolio_guard()
