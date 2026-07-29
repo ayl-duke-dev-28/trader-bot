@@ -48,6 +48,8 @@ The configured signal path is:
 - Trailing lock: arms at an `8%` gain and exits after a `4%` giveback
 - Stop cooldown: `3` days
 - Entry filters: skip buys within `3` days of earnings; gap protection at `5%`
+- Quote safety: missing, non-numeric, non-positive, `NaN`, and infinite prices
+  are rejected before sizing; a bad symbol is skipped without aborting the cycle
 - Portfolio drawdown guard: implemented but disabled
 - Schedule: weekdays from `09:30` through `15:30` ET, hourly
 
@@ -293,6 +295,9 @@ order was or was not submitted.
 
 Market-closed cycles, earnings-blackout exclusions, and cycles with no intents
 are written to `logs/trader.log`, not to the Excel activity log.
+Invalid market-data quotes are also written to `logs/trader.log`. They do not
+produce an order or Excel activity row because they are rejected before order
+planning.
 
 ## Going live
 
@@ -343,6 +348,7 @@ src/
   politicians/tracker.py STOCK Act feeds -> per-symbol signal
   risk/manager.py        sizing, kill switch, stop-losses
   risk/state.py          persisted risk state helpers
+  risk/validation.py     shared finite-positive price validation
   backtest/engine.py     walk-forward backtester
   backtest/simulator.py  live-path historical simulator
   trade_log.py           Excel activity log writer
@@ -354,10 +360,16 @@ tests/                   smoke tests (no network)
 ## Caveats
 
 - yfinance is unofficial and may rate-limit; the data layer caches to `data_cache/`.
+- Per-symbol yfinance quotes that are missing, non-numeric, non-positive, `NaN`,
+  or infinite are logged and skipped. The same finite-positive validation is
+  repeated during risk planning and immediately before execution.
 - Read-only Alpaca calls (account, positions, clock, open orders) retry on transient
   network errors. Order submission does **not** retry: a reset mid-submit leaves the
   order's fate unknown, and a blind retry risks duplicating a filled order. Those
   failures are logged as `FAIL` in the trade log and left for the next cycle.
+- A serialized XGBoost model may warn when loaded by a different XGBoost version.
+  Retrain with `python scripts/train_models.py` after dependency upgrades rather
+  than relying on cross-version pickle compatibility.
 - Politician-disclosure feeds are community-maintained and may move; URLs are in `src/politicians/tracker.py`.
 - Universe defaults to a curated tech-heavy list from `src/data/tech_universe.txt`. Broad universes work in principle but invite rate-limiting on free APIs.
 - Backtests use today's configured universe and available historical data, so old periods exclude symbols that did not yet have enough history.
