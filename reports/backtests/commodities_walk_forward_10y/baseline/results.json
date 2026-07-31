@@ -1,0 +1,73 @@
+{
+  "benchmarks": {
+    "DBC": {
+      "annualized_volatility": 0.1780974680623896,
+      "cagr": 0.09525396618799165,
+      "end_date": "2026-04-15",
+      "final_equity": 255967.43988875631,
+      "max_drawdown": -0.41711062092144335,
+      "sharpe": 0.6018150633831312,
+      "start_date": "2015-12-16",
+      "total_return": 1.5596743988875632
+    },
+    "QQQ": {
+      "annualized_volatility": 0.222387189974453,
+      "cagr": 0.19014159070492798,
+      "end_date": "2026-04-15",
+      "final_equity": 603847.3226943081,
+      "max_drawdown": -0.35118725001840645,
+      "sharpe": 0.8965412693180571,
+      "start_date": "2015-12-16",
+      "total_return": 5.038473226943081
+    },
+    "QQQM": {
+      "annualized_volatility": 0.22243645782425073,
+      "cagr": 0.15826870894376643,
+      "end_date": "2026-04-15",
+      "final_equity": 224464.5795944622,
+      "max_drawdown": -0.3504380232547013,
+      "sharpe": 0.773992472366944,
+      "start_date": "2020-10-13",
+      "total_return": 1.244645795944622
+    },
+    "SPY": {
+      "annualized_volatility": 0.17916251224550386,
+      "cagr": 0.1437453694492823,
+      "end_date": "2026-04-15",
+      "final_equity": 400439.5668642001,
+      "max_drawdown": -0.3371726769000343,
+      "sharpe": 0.841707272114466,
+      "start_date": "2015-12-16",
+      "total_return": 3.004395668642001
+    },
+    "VOO": {
+      "annualized_volatility": 0.17985099391809373,
+      "cagr": 0.14457893089125307,
+      "end_date": "2026-04-15",
+      "final_equity": 403464.52126300056,
+      "max_drawdown": -0.33993032364737086,
+      "sharpe": 0.8432820462718722,
+      "start_date": "2015-12-16",
+      "total_return": 3.0346452126300054
+    }
+  },
+  "strategy": {
+    "annualized_volatility": 0.15939958633419302,
+    "average_gross_exposure": 0.6470138062741255,
+    "cagr": 0.11250015618668385,
+    "cost_bps": 10.0,
+    "end_date": "2026-04-15",
+    "final_equity": 300798.5324473418,
+    "max_drawdown": -0.26219171124075324,
+    "rebalances": 155,
+    "sharpe": 0.7506711621488059,
+    "start_capital": 100000.0,
+    "start_date": "2015-12-16",
+    "test_months": 4,
+    "total_return": 2.0079853244734176,
+    "train_years": 5,
+    "transaction_costs": 10366.358661172993,
+    "turnover": 62.01513276019552,
+    "walk_forward_windows": 31
+  }
+}

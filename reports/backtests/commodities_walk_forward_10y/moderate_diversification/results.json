@@ -1,0 +1,22 @@
+{
+  "benchmarks": {},
+  "strategy": {
+    "annualized_volatility": 0.13879063890221904,
+    "average_gross_exposure": 0.6717823328096251,
+    "cagr": 0.05914219657526587,
+    "cost_bps": 10.0,
+    "end_date": "2026-04-15",
+    "final_equity": 181040.3569021413,
+    "max_drawdown": -0.2679868950414772,
+    "rebalances": 155,
+    "sharpe": 0.4847992350927499,
+    "start_capital": 100000.0,
+    "start_date": "2015-12-16",
+    "test_months": 4,
+    "total_return": 0.8104035690214131,
+    "train_years": 5,
+    "transaction_costs": 6750.374831493923,
+    "turnover": 56.80959653850909,
+    "walk_forward_windows": 31
+  }
+}
