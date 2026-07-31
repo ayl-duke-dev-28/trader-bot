@@ -31,3 +31,4 @@ models/*.pkl
 # Ad-hoc live-path report exports
 reports/backtests/live_path_*/
 .gstack/
+reports/backtests/*/adjusted_closes.csv
