@@ -215,26 +215,30 @@ def _simulate_parameter(
     cost_bps: float,
 ) -> dict[str, float]:
     """Run an in-sample candidate simulation for parameter selection."""
-    returns = prices.pct_change(fill_method=None)
-    weights = pd.Series(0.0, index=prices.columns)
-    equity_values: list[float] = []
-    daily_values: list[float] = []
-    equity = 1.0
-    previous_month: tuple[int, int] | None = None
-    for date in prices.index:
-        day_return = float((weights * returns.loc[date].fillna(0.0)).sum())
-        equity *= max(0.0, 1.0 + day_return)
-        month = (date.year, date.month)
-        if month != previous_month:
-            target = commodity_target_weights(prices.loc[:date], parameters)
-            turnover = float((target - weights).abs().sum())
-            equity *= max(0.0, 1.0 - turnover * cost_bps / 10_000.0)
-            weights = target
-            previous_month = month
-        equity_values.append(equity)
-        daily_values.append(day_return)
-    curve = pd.Series(equity_values, index=prices.index)
-    metrics = _metrics(curve, pd.Series(daily_values, index=prices.index), initial_equity=1.0)
+    asset_returns = prices.pct_change(fill_method=None).fillna(0.0)
+    month_keys = pd.Series(
+        list(zip(prices.index.year, prices.index.month, strict=True)),
+        index=prices.index,
+    )
+    rebalance_dates = month_keys[month_keys.ne(month_keys.shift(1))].index
+    targets = pd.DataFrame(
+        [commodity_target_weights(prices.loc[:date], parameters) for date in rebalance_dates],
+        index=rebalance_dates,
+    ).reindex(columns=prices.columns, fill_value=0.0)
+
+    # A target calculated at today's close becomes the position used for the
+    # next session's close-to-close return, matching the original daily loop.
+    effective_weights = targets.reindex(prices.index).ffill().shift(1).fillna(0.0)
+    gross_returns = (effective_weights * asset_returns).sum(axis=1)
+    turnover = targets.diff().abs().sum(axis=1)
+    turnover.iloc[0] = targets.iloc[0].abs().sum()
+    cost_fraction = pd.Series(0.0, index=prices.index)
+    cost_fraction.loc[rebalance_dates] = turnover * cost_bps / 10_000.0
+    daily_factors = (1.0 + gross_returns).clip(lower=0.0) * (1.0 - cost_fraction).clip(lower=0.0)
+    curve = daily_factors.cumprod()
+    net_returns = curve.pct_change(fill_method=None)
+    net_returns.iloc[0] = curve.iloc[0] - 1.0
+    metrics = _metrics(curve, net_returns, initial_equity=1.0)
     metrics["final_equity"] = float(curve.iloc[-1])
     return metrics
 
