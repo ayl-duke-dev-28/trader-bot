@@ -45,10 +45,18 @@ class MarketDataCacheTests(unittest.TestCase):
             self.assertFalse(first.empty)
             downloader.assert_called_once()
 
-            with patch("src.data.market_data.yf.download") as downloader:
+            # A stale Parquet file may remain from a different Python
+            # environment. Once CSV fallback exists, do not try that file and
+            # emit the same missing-engine warning on every run.
+            (Path(tmp) / "GLD.parquet").write_text("stale")
+            with (
+                patch("src.data.market_data.yf.download") as downloader,
+                patch("src.data.market_data.pd.read_parquet") as parquet_reader,
+            ):
                 second = get_history(cfg, "GLD", days=30)
 
             downloader.assert_not_called()
+            parquet_reader.assert_not_called()
             pd.testing.assert_frame_equal(first, second, check_freq=False)
 
 

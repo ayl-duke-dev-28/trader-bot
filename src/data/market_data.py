@@ -28,10 +28,13 @@ def _read_usable_cache(
     today,
 ) -> pd.DataFrame | None:
     """Read the preferred Parquet cache or its dependency-free CSV fallback."""
-    for path, reader in (
-        (parquet_path, lambda value: pd.read_parquet(value)),
-        (csv_path, lambda value: pd.read_csv(value, index_col=0, parse_dates=True)),
-    ):
+    parquet_reader = (parquet_path, lambda value: pd.read_parquet(value))
+    csv_reader = (csv_path, lambda value: pd.read_csv(value, index_col=0, parse_dates=True))
+    # A CSV file signals that Parquet was unavailable in the environment that
+    # last refreshed this symbol. Prefer it so a stale Parquet file does not
+    # reproduce a missing-engine warning on every invocation.
+    readers = (csv_reader, parquet_reader) if csv_path.exists() else (parquet_reader, csv_reader)
+    for path, reader in readers:
         if not path.exists():
             continue
         try:
