@@ -266,6 +266,46 @@ walk-forward runs. Temporary parameter-comparison reports are not retained.
 The remaining report files are `summary.txt`, `equity_curve.csv`, and
 `trades.csv` for each report. `walk_forward_20y` also has `benchmarks.csv`.
 
+## Portfolio VaR and expected shortfall
+
+The bot applies a one-day historical-simulation risk gate to the whole projected
+portfolio before submitting buys. For every aligned daily observation it
+multiplies each symbol's return by that position's projected dollar exposure as
+a fraction of account equity, then sums those contributions into a portfolio
+return. VaR is the configured loss quantile; expected shortfall is the average
+loss at or beyond that cutoff.
+
+<!-- AUTO-GENERATED: value_at_risk settings from config.yaml -->
+| Setting | Current value | Meaning |
+| --- | ---: | --- |
+| `enabled` | `true` | Apply the gate to paper/live sizing and backtests |
+| `confidence` | `0.99` | Report the 99th-percentile one-day loss |
+| `lookback_days` | `252` | Use up to one trading year of returns |
+| `min_observations` | `60` | Require this many fully aligned portfolio returns |
+| `max_var_pct` | `0.03` | Block a buy when projected VaR exceeds 3% of equity |
+| `max_expected_shortfall_pct` | `0.04` | Block a buy when projected tail loss exceeds 4% of equity |
+| `fail_closed` | `true` | Block buys when the enabled calculation lacks sufficient data |
+<!-- END AUTO-GENERATED -->
+
+The gate evaluates proposed buys sequentially, so an accepted buy becomes part
+of the projected exposure used to assess the next candidate. Existing sell
+intents reduce projected exposure first and are always preserved; VaR never
+prevents the bot from reducing risk. A blocked order is written to
+`logs/trader.log` with its projected VaR and expected shortfall, or with an
+insufficient-history explanation.
+
+Backtests use only returns available before each simulated trade decision. Their
+daily equity diagnostics include `historical_var_pct`,
+`expected_shortfall_pct`, and `var_observations`; summaries include the maximum
+values and `var_blocked_buys`. This keeps live sizing and historical evaluation
+on the same gate implementation in `src/risk/var.py`.
+
+VaR is not a maximum-loss estimate. Because it is backward-looking, it cannot
+anticipate a new flash crash before comparable losses enter the observation
+window. Expected shortfall describes the severity of the observed tail, while
+gap controls, stops, exposure caps, drawdown controls, and stress tests address
+different failure modes.
+
 ## Stress testing
 
 `python scripts/stress_test.py` runs entirely offline against deterministic
