@@ -1,0 +1,43 @@
+{
+  "benchmarks": {
+    "DBC": {
+      "annualized_volatility": 0.17809742999147346,
+      "cagr": 0.0952539661879912,
+      "end_date": "2026-04-15",
+      "final_equity": 255967.43988875544,
+      "max_drawdown": -0.4171105753704165,
+      "sharpe": 0.6018151530676599,
+      "start_date": "2015-12-16",
+      "total_return": 1.5596743988875543
+    },
+    "SPY": {
+      "annualized_volatility": 0.17916264559849512,
+      "cagr": 0.1437453209967683,
+      "end_date": "2026-04-15",
+      "final_equity": 400439.3916293646,
+      "max_drawdown": -0.337172726376749,
+      "sharpe": 0.8417065444568389,
+      "start_date": "2015-12-16",
+      "total_return": 3.0043939162936457
+    }
+  },
+  "strategy": {
+    "annualized_volatility": 0.15939958762520165,
+    "average_gross_exposure": 0.6470138123742178,
+    "cagr": 0.1125001447045475,
+    "cost_bps": 10.0,
+    "end_date": "2026-04-15",
+    "final_equity": 300798.5003776419,
+    "max_drawdown": -0.2621917261649478,
+    "rebalances": 155,
+    "sharpe": 0.75067109243708,
+    "start_capital": 100000.0,
+    "start_date": "2015-12-16",
+    "test_months": 4,
+    "total_return": 2.007985003776419,
+    "train_years": 5,
+    "transaction_costs": 10366.357680052031,
+    "turnover": 62.015133835745,
+    "walk_forward_windows": 31
+  }
+}
