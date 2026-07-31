@@ -281,6 +281,17 @@ python scripts/stress_test.py --no-model
 python scripts/stress_test.py --scenario flash_crash --scenario volatility_spike
 ```
 
+| Option | Default | Purpose |
+| --- | ---: | --- |
+| `--periods` | `520` | Number of synthetic business days, including warmup history |
+| `--simulation-bars` | `252` | Number of measured trading days per scenario |
+| `--seed` | `7` | Reproduce the same synthetic price paths |
+| `--start-capital` | `100000` | Starting portfolio cash |
+| `--runtime-budget` | `10` | Per-scenario warning threshold in seconds |
+| `--no-model` | off | Disable the saved ML vote |
+| `--scenario` | all | Run one named scenario; repeat the option to select several |
+| `--out-dir` | timestamped directory | Select the report directory |
+
 `PASS` means accounting values remained finite, equity and cash stayed valid,
 and position/exposure caps held. `WARN` means the bot stayed operational but
 crossed the default 35% drawdown, 20% worst-day, or 10-second runtime budget.
