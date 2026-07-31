@@ -17,7 +17,7 @@ No external plan file was supplied. The journeys were derived from the request:
 |---|---|---|---|
 | Sector breadth/volatility model and live macro cap | `PYTHONPATH=.venv/lib/python3.14/site-packages python3 -m pytest tests/test_equity_risk_overlays.py -q` failed during collection with `ModuleNotFoundError: src.risk.sector` | The same target passed: `6 passed` | Weak breadth and elevated volatility only reduce sizing; insufficient membership is neutral; contraction caps gross exposure without overriding a stricter market cap. |
 | Live macro handoff | `... pytest tests/test_smoke.py::test_trade_once_passes_alpaca_price_fallback_to_quote_loader -q` failed because `_load_live_macro_cycles` did not exist | The focused equity and live-handoff target passed: `5 passed` | The trading loop supplies loaded macro cycles to `RiskManager.size_orders`. |
-| Regression suite | N/A | `PYTHONPATH=.venv/lib/python3.14/site-packages python3 -m pytest -q` passed: `55 passed` | Existing signal, stop, VaR, cache, stress, commodity, and backtest behavior remains green. |
+| Regression suite | N/A | `PYTHONPATH=.venv/lib/python3.14/site-packages python3 -m pytest -q` passed: `57 passed` | Existing signal, stop, VaR, cache, stress, commodity, and backtest behavior remains green. |
 
 ## Test specification
 
