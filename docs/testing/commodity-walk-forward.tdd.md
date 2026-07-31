@@ -35,8 +35,16 @@ src/backtest/commodities.py: 86%
 
 `python -m compileall -q src scripts tests` and `git diff --check` also passed.
 The full repository suite passed with the virtual environment's dependencies on
-the Python path: `49 passed, 2 warnings in 19.08s`. The warnings are the existing
+the Python path: `50 passed, 2 warnings in 19.19s`. The warnings are the existing
 websockets deprecation and cross-version XGBoost serialization warning.
+
+## Cache fallback follow-up
+
+The network-enabled run downloaded prices but exposed a missing optional
+Parquet engine under the system Python. A new test first failed because
+`GLD.csv` was not created after `DataFrame.to_parquet` raised `ImportError`.
+After the fix, `tests/test_market_data_cache.py` passed and proves that the CSV
+fallback is both written and reused without another download.
 
 ## Data-run status and known gap
 

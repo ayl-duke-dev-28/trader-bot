@@ -243,6 +243,10 @@ The report directory contains `summary.md`, `results.json`,
 `weights.csv`. Each window records its isolated out-of-sample return, Sharpe,
 and drawdown as well as the training-only parameters selected for it.
 
+The historical data cache prefers Parquet. If the active Python environment
+does not have `pyarrow` or `fastparquet`, it automatically writes and reuses a
+CSV cache instead.
+
 This tests exchange-traded commodity products, not spot commodities or direct
 futures execution. Futures-based products can diverge materially from spot
 returns because expiring contracts must be rolled; contango, backwardation,

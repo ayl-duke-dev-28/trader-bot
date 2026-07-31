@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -21,16 +21,22 @@ def _cache_path(cfg: Config, symbol: str) -> Path:
     return cache_dir / f"{symbol}.parquet"
 
 
-def get_history(cfg: Config, symbol: str, days: int | None = None) -> pd.DataFrame:
-    """Return daily OHLCV for symbol. Re-uses cache if fresh (today already fetched)."""
-    days = days or int(cfg.get("data", "history_days", default=400))
-    path = _cache_path(cfg, symbol)
-    today = datetime.utcnow().date()
-    required_start = today - timedelta(days=days)
-
-    if path.exists():
+def _read_usable_cache(
+    parquet_path: Path,
+    csv_path: Path,
+    required_start,
+    today,
+) -> pd.DataFrame | None:
+    """Read the preferred Parquet cache or its dependency-free CSV fallback."""
+    for path, reader in (
+        (parquet_path, lambda value: pd.read_parquet(value)),
+        (csv_path, lambda value: pd.read_csv(value, index_col=0, parse_dates=True)),
+    ):
+        if not path.exists():
+            continue
         try:
-            df = pd.read_parquet(path)
+            df = reader(path)
+            df.index = pd.to_datetime(df.index)
             if (
                 not df.empty
                 and df.index.max().date() >= today - timedelta(days=1)
@@ -38,9 +44,23 @@ def get_history(cfg: Config, symbol: str, days: int | None = None) -> pd.DataFra
             ):
                 return df[df.index.date >= required_start]
         except Exception as e:
-            log.warning("cache read failed for %s: %s", symbol, e)
+            log.warning("%s cache read failed for %s: %s", path.suffix, path.stem, e)
+    return None
 
-    start = (datetime.utcnow() - timedelta(days=days + 30)).date()
+
+def get_history(cfg: Config, symbol: str, days: int | None = None) -> pd.DataFrame:
+    """Return daily OHLCV for symbol. Re-uses cache if fresh (today already fetched)."""
+    days = days or int(cfg.get("data", "history_days", default=400))
+    path = _cache_path(cfg, symbol)
+    csv_path = path.with_suffix(".csv")
+    today = datetime.now(UTC).date()
+    required_start = today - timedelta(days=days)
+
+    cached = _read_usable_cache(path, csv_path, required_start, today)
+    if cached is not None:
+        return cached
+
+    start = (datetime.now(UTC) - timedelta(days=days + 30)).date()
     try:
         df = yf.download(
             symbol,
@@ -64,7 +84,15 @@ def get_history(cfg: Config, symbol: str, days: int | None = None) -> pd.DataFra
     try:
         df.to_parquet(path)
     except Exception as e:
-        log.warning("cache write failed for %s: %s", symbol, e)
+        try:
+            df.to_csv(csv_path)
+            log.info(
+                "Parquet cache unavailable for %s (%s); wrote CSV fallback",
+                symbol,
+                type(e).__name__,
+            )
+        except Exception as csv_error:
+            log.warning("cache write failed for %s: %s", symbol, csv_error)
     return df[df.index.date >= required_start]
 
 
