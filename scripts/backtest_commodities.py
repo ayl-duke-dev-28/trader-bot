@@ -46,7 +46,7 @@ def _download_prices(years: float) -> pd.DataFrame:
     cfg = load_config(require_secrets=False)
     symbols = [*COMMODITY_ETFS, *BENCHMARKS]
     days = int(years * 365.25) + 45
-    history = get_history_many(cfg, symbols, days=days)
+    history = get_history_many(cfg, symbols, days=days, allow_partial_cache=True)
     missing_strategy = [symbol for symbol in COMMODITY_ETFS if symbol not in history]
     if missing_strategy:
         raise RuntimeError(

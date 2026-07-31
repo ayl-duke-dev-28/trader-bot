@@ -59,6 +59,17 @@ class MarketDataCacheTests(unittest.TestCase):
             parquet_reader.assert_not_called()
             pd.testing.assert_frame_equal(first, second, check_freq=False)
 
+            with patch("src.data.market_data.yf.download") as downloader:
+                partial = get_history(
+                    cfg,
+                    "GLD",
+                    days=365,
+                    allow_partial_cache=True,
+                )
+
+            downloader.assert_not_called()
+            self.assertFalse(partial.empty)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -26,6 +26,7 @@ def _read_usable_cache(
     csv_path: Path,
     required_start,
     today,
+    allow_partial_cache: bool = False,
 ) -> pd.DataFrame | None:
     """Read the preferred Parquet cache or its dependency-free CSV fallback."""
     parquet_reader = (parquet_path, lambda value: pd.read_parquet(value))
@@ -43,7 +44,7 @@ def _read_usable_cache(
             if (
                 not df.empty
                 and df.index.max().date() >= today - timedelta(days=1)
-                and df.index.min().date() <= required_start
+                and (allow_partial_cache or df.index.min().date() <= required_start)
             ):
                 return df[df.index.date >= required_start]
         except Exception as e:
@@ -51,7 +52,13 @@ def _read_usable_cache(
     return None
 
 
-def get_history(cfg: Config, symbol: str, days: int | None = None) -> pd.DataFrame:
+def get_history(
+    cfg: Config,
+    symbol: str,
+    days: int | None = None,
+    *,
+    allow_partial_cache: bool = False,
+) -> pd.DataFrame:
     """Return daily OHLCV for symbol. Re-uses cache if fresh (today already fetched)."""
     days = days or int(cfg.get("data", "history_days", default=400))
     path = _cache_path(cfg, symbol)
@@ -59,7 +66,13 @@ def get_history(cfg: Config, symbol: str, days: int | None = None) -> pd.DataFra
     today = datetime.now(UTC).date()
     required_start = today - timedelta(days=days)
 
-    cached = _read_usable_cache(path, csv_path, required_start, today)
+    cached = _read_usable_cache(
+        path,
+        csv_path,
+        required_start,
+        today,
+        allow_partial_cache=allow_partial_cache,
+    )
     if cached is not None:
         return cached
 
@@ -99,10 +112,16 @@ def get_history(cfg: Config, symbol: str, days: int | None = None) -> pd.DataFra
     return df[df.index.date >= required_start]
 
 
-def get_history_many(cfg: Config, symbols: list[str], days: int | None = None) -> dict[str, pd.DataFrame]:
+def get_history_many(
+    cfg: Config,
+    symbols: list[str],
+    days: int | None = None,
+    *,
+    allow_partial_cache: bool = False,
+) -> dict[str, pd.DataFrame]:
     out: dict[str, pd.DataFrame] = {}
     for s in symbols:
-        df = get_history(cfg, s, days=days)
+        df = get_history(cfg, s, days=days, allow_partial_cache=allow_partial_cache)
         if not df.empty:
             out[s] = df
     return out
