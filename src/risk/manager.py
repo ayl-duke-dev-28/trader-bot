@@ -26,6 +26,7 @@ from src.data.sectors import sector_for
 from src.risk.indicators import gap_pct, latest_atr_pct
 from src.risk.state import RiskState
 from src.risk.validation import is_valid_price
+from src.risk.var import filter_buy_intents_by_var
 from src.trade_log import TradeLogEntry, TradeLogger
 
 log = logging.getLogger(__name__)
@@ -339,7 +340,26 @@ class RiskManager:
             open_slots -= 1
             sector_used[sector] = sector_used.get(sector, 0) + 1
 
-        return intents
+        var_cfg = self._r("value_at_risk", default={}) or {}
+        filtered, diagnostics = filter_buy_intents_by_var(
+            intents,
+            current_exposures={symbol: position.market_value for symbol, position in held.items()},
+            history=history,
+            equity=equity,
+            config=var_cfg,
+        )
+        for symbol in diagnostics.blocked_symbols:
+            estimate = diagnostics.blocked_estimates.get(symbol)
+            if estimate is None:
+                log.warning("[SKIP] %s VaR history unavailable; fail-closed gate active", symbol)
+            else:
+                log.warning(
+                    "[SKIP] %s projected VaR %.2f%% / ES %.2f%% exceeds portfolio limit",
+                    symbol,
+                    estimate.var_pct * 100,
+                    estimate.expected_shortfall_pct * 100,
+                )
+        return filtered
 
     def _benchmark_core_cfg(self) -> dict:
         return self._r("benchmark_core", default={}) or {}

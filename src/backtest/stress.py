@@ -42,6 +42,7 @@ class StressResult:
     worst_day_return: float
     trades: int
     stops: int
+    var_blocked_buys: int
     min_cash: float
     max_positions: int
     max_gross_exposure: float
@@ -282,6 +283,7 @@ def _run_scenario(
             worst_day_return=float("nan"),
             trades=0,
             stops=0,
+            var_blocked_buys=0,
             min_cash=float("nan"),
             max_positions=0,
             max_gross_exposure=float("nan"),
@@ -347,6 +349,7 @@ def _evaluate_simulation(
         worst_day_return=worst_day,
         trades=int(simulation.summary["trades"]),
         stops=int(simulation.summary["stops"]),
+        var_blocked_buys=int(simulation.summary.get("var_blocked_buys", 0)),
         min_cash=float(cash.min()),
         max_positions=int(positions.max()),
         max_gross_exposure=float(gross.max()),
@@ -429,14 +432,14 @@ def write_stress_report(suite: StressSuiteResult, out_dir: Path) -> None:
         f"- Total runtime: `{suite.total_runtime_seconds:.2f}s`",
         f"- Safety verdict: **{suite.safety_verdict}**",
         "",
-        "| Scenario | Status | Return | Max drawdown | Worst day | Trades | Stops | Max gross | Runtime |",
+        "| Scenario | Status | Return | Max drawdown | Worst day | Trades | VaR blocks | Max gross | Runtime |",
         "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for result in suite.results:
         lines.append(
             f"| {result.scenario} | {result.status} | {result.total_return:.2%} | "
             f"{result.max_drawdown:.2%} | {result.worst_day_return:.2%} | "
-            f"{result.trades} | {result.stops} | {result.max_gross_exposure:.2%} | "
+            f"{result.trades} | {result.var_blocked_buys} | {result.max_gross_exposure:.2%} | "
             f"{result.runtime_seconds:.2f}s |"
         )
     details = [result for result in suite.results if result.failed_invariants or result.warnings]

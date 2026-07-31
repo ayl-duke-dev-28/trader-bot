@@ -29,6 +29,9 @@ The configured signal path is:
 - **Economic-cycle overlay** — implemented for backtests but disabled by
   default. It combines growth, inflation, unemployment, and interest rates into
   separate long- and short-cycle scores and can only reduce gross exposure.
+- **Historical portfolio VaR gate** — enabled for paper trading and backtests.
+  It blocks projected buys when one-day 99% historical VaR exceeds 3% of equity
+  or expected shortfall exceeds 4%; sells are never blocked.
 
 ## Current State
 
@@ -52,6 +55,9 @@ The configured signal path is:
   Alpaca IEX latest-trade request; unresolved, non-numeric, non-positive, `NaN`,
   and infinite prices are rejected before sizing without aborting the cycle
 - Portfolio drawdown guard: implemented but disabled
+- Portfolio VaR: enabled; one-day 99% historical simulation over 252 aligned
+  returns, minimum 60 observations, 3% VaR and 4% expected-shortfall limits,
+  fail-closed when an enabled pre-trade check lacks enough aligned history
 - Schedule: weekdays from `09:30` through `15:30` ET, hourly
 
 ## Approved Next Experiment — volatility-targeted exposure
@@ -238,6 +244,10 @@ Sharpe, and max drawdown:
 - `loss_day_rate`
 - `avg_loss_day_return`
 - `worst_day_return`
+- `historical_var_pct`, `expected_shortfall_pct`, and `var_observations` when
+  the VaR gate is enabled
+- `var_blocked_buys`, `max_historical_var_pct`, and
+  `max_expected_shortfall_pct` in the summary
 
 These are risk diagnostics, not an optimization guarantee. A strategy can have
 zero losing days by staying in cash, but any active long-equity strategy should
@@ -299,10 +309,13 @@ crossed the default 35% drawdown, 20% worst-day, or 10-second runtime budget.
 cash, or a configured cap violation. These are controlled behavior tests, not
 return forecasts or substitutes for historical out-of-sample backtests.
 
-The retained 2026-07-31 run passed every software safety invariant but received
-an overall `WARN`: the volatility-spike scenario drew down `58.39%`. The 100 bps
-cost scenario lost `27.05%`, indicating substantial turnover sensitivity. See
-`reports/stress_tests/2026-07-31/summary.md` for the complete scenario table.
+The retained VaR-enabled 2026-07-31 run passed every software safety invariant.
+In the volatility-spike scenario the gate blocked 64 projected buys and reduced
+maximum drawdown from `58.39%` in the original run to `31.93%`. It did not reduce
+the instantaneous flash-crash loss because a backward-looking estimate cannot
+anticipate a shock absent from its return window. The 100 bps cost scenario still
+lost `27.05%`, indicating substantial turnover sensitivity. See
+`reports/stress_tests/2026-07-31-var/summary.md` for the complete scenario table.
 
 ## Current Files
 
@@ -400,6 +413,7 @@ src/
   risk/manager.py        sizing, kill switch, stop-losses
   risk/state.py          persisted risk state helpers
   risk/validation.py     shared finite-positive price validation
+  risk/var.py            historical portfolio VaR and expected-shortfall gate
   backtest/engine.py     walk-forward backtester
   backtest/simulator.py  live-path historical simulator
   trade_log.py           Excel activity log writer
@@ -424,6 +438,11 @@ tests/                   smoke tests (no network)
 - A serialized XGBoost model may warn when loaded by a different XGBoost version.
   Retrain with `python scripts/train_models.py` after dependency upgrades rather
   than relying on cross-version pickle compatibility.
+- Historical VaR is a backward-looking loss quantile, not a maximum-loss bound.
+  It can react only after stressed returns enter its observation window and may
+  understate regime shifts, liquidity gaps, and unprecedented shocks. Expected
+  shortfall and the separate stress suite are retained because VaR alone does
+  not describe the severity of losses beyond its cutoff.
 - Politician-disclosure feeds are community-maintained and may move; URLs are in `src/politicians/tracker.py`.
 - Universe defaults to a curated tech-heavy list from `src/data/tech_universe.txt`. Broad universes work in principle but invite rate-limiting on free APIs.
 - Backtests use today's configured universe and available historical data, so old periods exclude symbols that did not yet have enough history.

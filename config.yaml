@@ -87,6 +87,18 @@ risk:
     enabled: false
     max_drawdown_pct: 0.55
 
+  # Pre-trade one-day historical portfolio VaR / expected-shortfall gate.
+  # Sells are always allowed. Projected buys are blocked when either limit is
+  # exceeded or when fewer than min_observations aligned returns are available.
+  value_at_risk:
+    enabled: true
+    confidence: 0.99
+    lookback_days: 252
+    min_observations: 60
+    max_var_pct: 0.03
+    max_expected_shortfall_pct: 0.04
+    fail_closed: true
+
   # volatility-scaled stop (replaces flat per_trade_stop_loss_pct)
   stop_atr_mult: 2.5                # stop distance = N * ATR14, expressed as %
   stop_min_pct: 0.04                # floor on stop distance

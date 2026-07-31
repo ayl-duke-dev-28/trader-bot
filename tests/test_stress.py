@@ -61,8 +61,8 @@ def test_stress_suite_runs_offline_scenarios_and_checks_safety_invariants():
     cfg = load_config(require_secrets=False)
     suite = run_stress_suite(
         cfg,
-        periods=300,
-        simulation_bars=60,
+        periods=520,
+        simulation_bars=252,
         seed=11,
         include_saved_model=False,
     )
@@ -76,6 +76,7 @@ def test_stress_suite_runs_offline_scenarios_and_checks_safety_invariants():
     assert all(result.invariants_passed for result in suite.results)
     assert suite.by_name("macro_contraction").max_gross_exposure <= 0.30
     assert suite.by_name("high_cost").final_equity <= suite.by_name("baseline").final_equity
+    assert suite.by_name("volatility_spike").var_blocked_buys > 0
 
 
 def test_stress_report_writes_machine_and_human_readable_results():

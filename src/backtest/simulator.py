@@ -15,6 +15,7 @@ from src.config import Config
 from src.data.macro import macro_cycle_at, macro_exposure_cap
 from src.data.sectors import sector_for
 from src.risk.indicators import gap_pct, latest_atr_pct
+from src.risk.var import estimate_historical_risk, filter_buy_intents_by_var
 from src.signals.classical import classical_signal
 from src.signals.hedge_fund import hedge_fund_decision
 from src.signals.ml import build_features, load_model, ml_signal
@@ -36,6 +37,13 @@ class SimPosition:
         if self.avg_entry_price <= 0:
             return 0.0
         return price / self.avg_entry_price - 1.0
+
+
+@dataclass(frozen=True)
+class _SimRiskIntent:
+    symbol: str
+    side: str
+    target_dollars: float
 
 
 @dataclass
@@ -381,6 +389,8 @@ def simulate_current_bot(
     drawdown_guard_cfg = _cfg_r(cfg, "portfolio_drawdown_guard", default={}) or {}
     drawdown_guard_enabled = bool(drawdown_guard_cfg.get("enabled", False))
     drawdown_guard_max = float(drawdown_guard_cfg.get("max_drawdown_pct", 1.0))
+    var_cfg = _cfg_r(cfg, "value_at_risk", default={}) or {}
+    var_enabled = bool(var_cfg.get("enabled", False))
     macro_cfg = macro_cycle_config or {}
     macro_enabled = bool(macro_cfg.get("enabled", False)) and macro_cycles is not None and not macro_cycles.empty
 
@@ -390,6 +400,7 @@ def simulate_current_bot(
     highwater: dict[str, float] = {}
     portfolio_highwater = float(start_capital)
     portfolio_guard_tripped = False
+    var_blocked_buys = 0
     trade_rows: list[dict[str, object]] = []
     curve_rows: list[dict[str, object]] = []
 
@@ -406,6 +417,32 @@ def simulate_current_bot(
             if price is not None:
                 total += pos.market_value(price)
         return float(total)
+
+    def exposures_on(date: pd.Timestamp) -> dict[str, float]:
+        exposures: dict[str, float] = {}
+        for symbol, position in positions.items():
+            price = price_on(symbol, date)
+            if price is not None:
+                exposures[symbol] = position.market_value(price)
+        return exposures
+
+    def var_history_at(date: pd.Timestamp, *, include_current: bool) -> dict[str, pd.DataFrame]:
+        return {
+            symbol: frame.loc[:date] if include_current else frame.loc[frame.index < date]
+            for symbol, frame in history.items()
+        }
+
+    def var_allows_buy(symbol: str, dollars: float, date: pd.Timestamp, equity: float) -> bool:
+        if not var_enabled:
+            return True
+        accepted, _ = filter_buy_intents_by_var(
+            [_SimRiskIntent(symbol, "buy", dollars)],
+            current_exposures=exposures_on(date),
+            history=var_history_at(date, include_current=False),
+            equity=equity,
+            config=var_cfg,
+        )
+        return bool(accepted)
 
     def log_trade(date: pd.Timestamp, action: str, symbol: str, qty: float, price: float, score: float | None, reason: str) -> None:
         trade_rows.append({
@@ -576,6 +613,9 @@ def simulate_current_bot(
             delta = min(max(0.0, target - existing), remaining_gross)
             min_trade = float(core_cfg.get("min_trade_dollars", 100.0))
             if delta >= max(min_trade, core_price):
+                if not var_allows_buy(core_symbol, delta, date, current_equity):
+                    var_blocked_buys += 1
+                    delta = 0.0
                 spendable = min(delta, cash / (1.0 + cost_bps / 10_000.0))
                 qty = spendable / core_price
                 if not allow_fractional:
@@ -627,6 +667,9 @@ def simulate_current_bot(
             delta = target - existing
             if delta < max(100.0, max_per_position * 0.1) or delta < price:
                 continue
+            if not var_allows_buy(sym, delta, date, current_equity):
+                var_blocked_buys += 1
+                continue
             spendable = min(delta, cash / (1.0 + cost_bps / 10_000.0))
             qty = spendable / price
             if not allow_fractional:
@@ -658,6 +701,24 @@ def simulate_current_bot(
             "positions": len(positions),
             "max_gross_exposure": round(adjusted_max_gross_pct, 4),
         }
+        if var_enabled:
+            estimate = estimate_historical_risk(
+                var_history_at(date, include_current=True),
+                exposures_on(date),
+                equity=equity_on(date),
+                confidence=float(var_cfg.get("confidence", 0.99)),
+                lookback_days=int(var_cfg.get("lookback_days", 252)),
+                min_observations=int(var_cfg.get("min_observations", 60)),
+            )
+            curve_row.update(
+                {
+                    "historical_var_pct": np.nan if estimate is None else estimate.var_pct,
+                    "expected_shortfall_pct": (
+                        np.nan if estimate is None else estimate.expected_shortfall_pct
+                    ),
+                    "var_observations": 0 if estimate is None else estimate.observations,
+                }
+            )
         if macro_enabled:
             cycle = macro_cycle_at(macro_cycles, date)
             curve_row.update(
@@ -721,7 +782,16 @@ def simulate_current_bot(
         "symbols": int(len(history)),
         "cost_bps": float(cost_bps),
         "macro_cycle_enabled": bool(macro_enabled),
+        "var_enabled": bool(var_enabled),
+        "var_blocked_buys": int(var_blocked_buys),
     }
+    if var_enabled:
+        summary.update(
+            {
+                "max_historical_var_pct": float(equity_curve["historical_var_pct"].max()),
+                "max_expected_shortfall_pct": float(equity_curve["expected_shortfall_pct"].max()),
+            }
+        )
     if macro_enabled:
         macro_regimes = equity_curve["macro_regime"].fillna("unknown")
         summary.update(
@@ -751,6 +821,8 @@ def write_simulation_report(result: SimulationResult, out_dir: Path) -> None:
                 "loss_day_rate",
                 "avg_loss_day_return",
                 "worst_day_return",
+                "max_historical_var_pct",
+                "max_expected_shortfall_pct",
             }:
                 lines.append(f"{key}: {value:.2%}")
             else:
