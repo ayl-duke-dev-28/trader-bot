@@ -5,7 +5,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -19,7 +19,7 @@ from src.signals.hedge_fund import hedge_fund_decision
 from src.signals.ml import build_features, build_training_set
 from src.signals.momentum_breakout import momentum_breakout_scores
 from src.backtest.engine import backtest
-from src.broker.alpaca_client import Account, Position, _retry_request
+from src.broker.alpaca_client import Account, AlpacaBroker, Position, _retry_request
 from src.risk.manager import RiskManager, TradeIntent
 from src.risk.state import RiskState
 from src.risk.validation import is_valid_price
@@ -142,6 +142,124 @@ def test_last_prices_drops_non_finite_quotes():
         prices = _last_prices(["GOOD", "NAN", "INF", "ZERO", "MISSING", "TEXT"])
 
     assert prices == {"GOOD": 100.0}
+
+
+def test_last_prices_recovers_invalid_quotes_with_fallback():
+    columns = pd.MultiIndex.from_product([["Close"], ["GOOD", "RECOVER", "UNRESOLVED"]])
+    download = pd.DataFrame(
+        [[100.0, float("nan"), float("nan")]],
+        columns=columns,
+        index=[pd.Timestamp("2026-07-30")],
+    )
+    fallback_calls: list[list[str]] = []
+
+    def fallback(symbols: list[str]) -> dict[str, float]:
+        fallback_calls.append(symbols)
+        return {"RECOVER": 42.5, "UNRESOLVED": float("nan")}
+
+    with patch("src.trader.yf.download", return_value=download):
+        prices = _last_prices(["GOOD", "RECOVER", "UNRESOLVED"], fallback=fallback)
+
+    assert fallback_calls == [["RECOVER", "UNRESOLVED"]]
+    assert prices == {"GOOD": 100.0, "RECOVER": 42.5}
+
+
+def test_last_prices_recovers_all_symbols_when_yahoo_fails():
+    fallback = MagicMock(return_value={"GOOD": 100.0})
+
+    with patch("src.trader.yf.download", side_effect=RuntimeError("Yahoo unavailable")):
+        prices = _last_prices(["GOOD"], fallback=fallback)
+
+    fallback.assert_called_once_with(["GOOD"])
+    assert prices == {"GOOD": 100.0}
+
+
+def test_last_prices_handles_empty_input_and_fallback_failure():
+    assert _last_prices([], fallback=MagicMock()) == {}
+
+    columns = pd.MultiIndex.from_product([["Close"], ["BAD"]])
+    download = pd.DataFrame(
+        [[float("nan")]],
+        columns=columns,
+        index=[pd.Timestamp("2026-07-30")],
+    )
+    with patch("src.trader.yf.download", return_value=download):
+        prices = _last_prices(
+            ["BAD"],
+            fallback=MagicMock(side_effect=RuntimeError("Alpaca unavailable")),
+        )
+
+    assert prices == {}
+
+
+def test_alpaca_latest_prices_uses_iex_and_filters_invalid_trades():
+    class Trade:
+        def __init__(self, price):
+            self.price = price
+
+    class DataClient:
+        request = None
+
+        def get_stock_latest_trade(self, request):
+            self.request = request
+            return {
+                "GOOD": Trade(101.25),
+                "NAN": Trade(float("nan")),
+                "NONE": None,
+            }
+
+    broker = object.__new__(AlpacaBroker)
+    broker.market_data_client = DataClient()
+
+    prices = broker.latest_prices(["GOOD", "NAN", "NONE", "ABSENT"])
+
+    assert broker.market_data_client.request.symbol_or_symbols == ["GOOD", "NAN", "NONE", "ABSENT"]
+    assert broker.market_data_client.request.feed.value == "iex"
+    assert prices == {"GOOD": 101.25}
+
+
+def test_alpaca_latest_prices_handles_empty_input_and_api_failure():
+    class FailingDataClient:
+        @staticmethod
+        def get_stock_latest_trade(request):
+            raise ValueError("bad response")
+
+    broker = object.__new__(AlpacaBroker)
+    broker.market_data_client = FailingDataClient()
+
+    assert broker.latest_prices([]) == {}
+    assert broker.latest_prices(["BAD"]) == {}
+
+
+def test_trade_once_passes_alpaca_price_fallback_to_quote_loader():
+    class DummyConfig:
+        is_live = False
+
+        @staticmethod
+        def get(*keys, default=None):
+            return default
+
+    broker = MagicMock()
+    broker.is_market_open.return_value = True
+    broker.positions.return_value = []
+    risk = MagicMock()
+    risk.apply_portfolio_drawdown_guard.return_value = False
+    risk.size_orders.return_value = []
+
+    with (
+        patch("src.trader.AlpacaBroker", return_value=broker),
+        patch("src.trader.trade_logger_from_config"),
+        patch("src.trader.RiskManager", return_value=risk),
+        patch("src.trader.load_universe", return_value=["GOOD"]),
+        patch("src.trader._history_for_all", return_value={}),
+        patch("src.trader.compute_signals", return_value={"GOOD": 1.0}),
+        patch("src.trader._last_prices", return_value={"GOOD": 100.0}) as price_loader,
+    ):
+        from src.trader import trade_once
+
+        trade_once(DummyConfig())
+
+    price_loader.assert_called_once_with(["GOOD"], fallback=broker.latest_prices)
 
 
 def test_size_orders_skips_non_finite_quote():

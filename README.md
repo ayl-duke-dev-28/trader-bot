@@ -48,8 +48,9 @@ The configured signal path is:
 - Trailing lock: arms at an `8%` gain and exits after a `4%` giveback
 - Stop cooldown: `3` days
 - Entry filters: skip buys within `3` days of earnings; gap protection at `5%`
-- Quote safety: missing, non-numeric, non-positive, `NaN`, and infinite prices
-  are rejected before sizing; a bad symbol is skipped without aborting the cycle
+- Quote recovery and safety: missing or invalid Yahoo prices are retried in one
+  Alpaca IEX latest-trade request; unresolved, non-numeric, non-positive, `NaN`,
+  and infinite prices are rejected before sizing without aborting the cycle
 - Portfolio drawdown guard: implemented but disabled
 - Schedule: weekdays from `09:30` through `15:30` ET, hourly
 
@@ -113,6 +114,7 @@ To deploy on a free Oracle Cloud VM see [docs/ORACLE_DEPLOY.md](docs/ORACLE_DEPL
 | `python scripts/backtest.py` | Run the primary live-path backtest; walk-forward ML is on by default | No |
 | `python scripts/fetch_macro_data.py` | Download point-in-time initial-release macro history from FRED | No Alpaca keys; requires `FRED_API_KEY` |
 | `python scripts/simulate_backtest.py` | Run the simpler current-decision simulator without walk-forward retraining | No |
+| `python scripts/stress_test.py` | Run deterministic offline market, data, cost, and macro stress scenarios | No |
 | `python scripts/train_models.py` | Download the configured training history and write the XGBoost model | Yes |
 | `python scripts/politicians_analyze.py` | Fetch and rank recent politician disclosures | Yes, because it loads the broker-backed configuration |
 | `python scripts/run_paper.py` | Start the scheduled paper/live trading loop | Yes |
@@ -254,6 +256,43 @@ walk-forward runs. Temporary parameter-comparison reports are not retained.
 The remaining report files are `summary.txt`, `equity_curve.csv`, and
 `trades.csv` for each report. `walk_forward_20y` also has `benchmarks.csv`.
 
+## Stress testing
+
+`python scripts/stress_test.py` runs entirely offline against deterministic
+synthetic OHLCV data. It does not contact Yahoo, Alpaca, or submit orders. The
+default suite replays the live-path simulator through:
+
+- an ordinary correlated market baseline;
+- a synchronized 32% flash crash;
+- a prolonged 48% bear-market decline;
+- repeated market-wide volatility spikes;
+- missing OHLC observations for several symbols;
+- extreme transaction costs of 100 basis points per trade; and
+- a severe macro contraction with a 30% gross-exposure cap.
+
+The saved ML model is included by default when present. Use `--no-model` to
+isolate the deterministic non-ML strategy path. Each run writes `summary.md`,
+`results.csv`, and `results.json` under a timestamped directory in
+`reports/stress_tests/`.
+
+```bash
+python scripts/stress_test.py
+python scripts/stress_test.py --no-model
+python scripts/stress_test.py --scenario flash_crash --scenario volatility_spike
+```
+
+`PASS` means accounting values remained finite, equity and cash stayed valid,
+and position/exposure caps held. `WARN` means the bot stayed operational but
+crossed the default 35% drawdown, 20% worst-day, or 10-second runtime budget.
+`FAIL` means an exception, insolvency, non-finite accounting value, negative
+cash, or a configured cap violation. These are controlled behavior tests, not
+return forecasts or substitutes for historical out-of-sample backtests.
+
+The retained 2026-07-31 run passed every software safety invariant but received
+an overall `WARN`: the volatility-spike scenario drew down `58.39%`. The 100 bps
+cost scenario lost `27.05%`, indicating substantial turnover sensitivity. See
+`reports/stress_tests/2026-07-31/summary.md` for the complete scenario table.
+
 ## Current Files
 
 Important tracked files:
@@ -268,6 +307,7 @@ Important tracked files:
 - `scripts/backtest.py` — live-path historical backtester
 - `scripts/fetch_macro_data.py` — downloads initial-release FRED macro history
 - `scripts/simulate_backtest.py` — simulation report runner
+- `scripts/stress_test.py` — deterministic offline stress-suite runner
 - `scripts/train_models.py` — trains `models/xgb_direction.joblib`
 - `scripts/run_paper.py` — starts the scheduled paper/live loop
 - `scripts/politicians_analyze.py` — inspects disclosure feeds
@@ -294,10 +334,10 @@ order was or was not submitted.
 - The file is created on the first logged action — until then it won't exist on disk.
 
 Market-closed cycles, earnings-blackout exclusions, and cycles with no intents
-are written to `logs/trader.log`, not to the Excel activity log.
-Invalid market-data quotes are also written to `logs/trader.log`. They do not
-produce an order or Excel activity row because they are rejected before order
-planning.
+are written to `logs/trader.log`, not to the Excel activity log. Yahoo quote
+misses recovered from Alpaca IEX are summarized there at `INFO`; unresolved
+invalid quotes are logged at `WARNING`. An unresolved quote does not produce an
+order or Excel activity row because it is rejected before order planning.
 
 ## Going live
 
@@ -360,13 +400,16 @@ tests/                   smoke tests (no network)
 ## Caveats
 
 - yfinance is unofficial and may rate-limit; the data layer caches to `data_cache/`.
-- Per-symbol yfinance quotes that are missing, non-numeric, non-positive, `NaN`,
-  or infinite are logged and skipped. The same finite-positive validation is
-  repeated during risk planning and immediately before execution.
-- Read-only Alpaca calls (account, positions, clock, open orders) retry on transient
-  network errors. Order submission does **not** retry: a reset mid-submit leaves the
-  order's fate unknown, and a blind retry risks duplicating a filled order. Those
-  failures are logged as `FAIL` in the trade log and left for the next cycle.
+- Per-symbol yfinance prices that are missing or invalid are recovered through a
+  single Alpaca IEX latest-trade request for only the affected symbols. Any
+  unresolved, non-numeric, non-positive, `NaN`, or infinite price is logged and
+  skipped. The same finite-positive validation is repeated during risk planning
+  and immediately before execution.
+- Read-only Alpaca calls (account, positions, clock, open orders, latest trades)
+  retry on transient network errors. Order submission does **not** retry: a reset
+  mid-submit leaves the order's fate unknown, and a blind retry risks duplicating
+  a filled order. Those failures are logged as `FAIL` in the trade log and left
+  for the next cycle.
 - A serialized XGBoost model may warn when loaded by a different XGBoost version.
   Retrain with `python scripts/train_models.py` after dependency upgrades rather
   than relying on cross-version pickle compatibility.

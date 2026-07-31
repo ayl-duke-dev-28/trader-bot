@@ -5,6 +5,7 @@ import logging
 import time
 from datetime import datetime, time as dt_time, timedelta
 from pathlib import Path
+from typing import Callable
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -62,10 +63,15 @@ def _setup_logging(cfg: Config) -> None:
     )
 
 
-def _last_prices(symbols: list[str]) -> dict[str, float]:
+def _last_prices(
+    symbols: list[str],
+    fallback: Callable[[list[str]], dict[str, float]] | None = None,
+) -> dict[str, float]:
+    """Fetch Yahoo closes, recovering only missing/invalid symbols via fallback."""
     out: dict[str, float] = {}
     if not symbols:
         return out
+    raw_quotes: dict[str, object] = {}
     try:
         data = yf.download(symbols, period="1d", progress=False, threads=False, auto_adjust=True)
         if "Close" in data.columns:
@@ -76,18 +82,40 @@ def _last_prices(symbols: list[str]) -> dict[str, float]:
                     for s in symbols:
                         if s in last.index:
                             raw_price = last[s]
+                            raw_quotes[s] = raw_price
                             if is_valid_price(raw_price):
                                 out[s] = float(raw_price)
-                            else:
-                                log.warning("invalid latest price for %s: %r", s, raw_price)
                 else:
                     raw_price = close.iloc[-1]
+                    raw_quotes[symbols[0]] = raw_price
                     if is_valid_price(raw_price):
                         out[symbols[0]] = float(raw_price)
-                    else:
-                        log.warning("invalid latest price for %s: %r", symbols[0], raw_price)
     except Exception as e:
         log.warning("price fetch failed: %s", e)
+
+    missing = [symbol for symbol in symbols if symbol not in out]
+    if fallback is not None and missing:
+        try:
+            recovered = fallback(missing)
+        except Exception as e:
+            log.warning("fallback price fetch failed: %s", e)
+            recovered = {}
+        recovered_count = 0
+        for symbol in missing:
+            raw_price = recovered.get(symbol)
+            if is_valid_price(raw_price):
+                out[symbol] = float(raw_price)
+                recovered_count += 1
+        if recovered_count:
+            log.info(
+                "recovered latest prices for %d/%d symbols from Alpaca IEX",
+                recovered_count,
+                len(missing),
+            )
+
+    for symbol in symbols:
+        if symbol not in out:
+            log.warning("invalid latest price for %s: %r", symbol, raw_quotes.get(symbol))
     return out
 
 
@@ -201,7 +229,7 @@ def trade_once(cfg: Config) -> None:
         return
 
     scores = compute_signals(cfg, symbols, history=history)
-    prices = _last_prices(symbols)
+    prices = _last_prices(symbols, fallback=broker.latest_prices)
     intents = _consolidate_intents(risk.size_orders(scores, prices, history=history))
     intents = _apply_earnings_blackout(cfg, intents)
 

@@ -10,13 +10,17 @@ import time
 from dataclasses import dataclass
 from typing import Callable, TypeVar
 
-from requests.exceptions import RequestException
+from alpaca.data.enums import DataFeed
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockLatestTradeRequest
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.enums import QueryOrderStatus
 from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest
+from requests.exceptions import RequestException
 
 from src.config import Config
+from src.risk.validation import is_valid_price
 
 log = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -63,7 +67,36 @@ class AlpacaBroker:
             secret_key=cfg.api_secret,
             paper=not cfg.is_live,
         )
+        self.market_data_client = StockHistoricalDataClient(
+            api_key=cfg.api_key,
+            secret_key=cfg.api_secret,
+        )
         log.info("Alpaca broker initialized in %s mode", "LIVE" if cfg.is_live else "paper")
+
+    def latest_prices(self, symbols: list[str]) -> dict[str, float]:
+        """Return finite positive latest-trade prices from Alpaca's IEX feed."""
+        if not symbols:
+            return {}
+        request = StockLatestTradeRequest(
+            symbol_or_symbols=symbols,
+            feed=DataFeed.IEX,
+        )
+        try:
+            trades = _retry_request(
+                "Alpaca latest-trade fetch",
+                lambda: self.market_data_client.get_stock_latest_trade(request),
+            )
+        except Exception as e:
+            log.warning("latest-trade fetch failed: %s", e)
+            return {}
+
+        prices: dict[str, float] = {}
+        for symbol in symbols:
+            trade = trades.get(symbol)
+            raw_price = getattr(trade, "price", None)
+            if is_valid_price(raw_price):
+                prices[symbol] = float(raw_price)
+        return prices
 
     def account(self) -> Account:
         a = _retry_request("Alpaca account fetch", self.client.get_account)

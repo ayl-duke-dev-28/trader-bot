@@ -1,0 +1,8 @@
+scenario,description,status,runtime_seconds,final_equity,total_return,max_drawdown,worst_day_return,trades,stops,min_cash,max_positions,max_gross_exposure,invariants_passed,failed_invariants,warnings
+baseline,Correlated rising market with ordinary daily volatility and 5 bps costs.,PASS,0.3965260828845203,101157.2,0.011571999999999916,-0.050662170716455734,-0.00813218710564878,117,1,35421.13,6,0.6621761305198391,True,[],[]
+flash_crash,A synchronized 32% price gap followed by only a partial recovery.,PASS,0.3032760410569608,85543.0,-0.14456999999999998,-0.19157760725012352,-0.17976515529952342,68,3,37293.7,5,0.6315548620547458,True,[],[]
+prolonged_bear,A persistent decline that removes 48% from market prices.,PASS,0.27627904107794166,98129.92,-0.018700800000000073,-0.025584824544184093,-0.007172052311911314,62,2,37106.39,5,0.6286042579044376,True,[],[]
+volatility_spike,Alternating market-wide moves of roughly 3.5% to 5.5%.,WARN,0.3672392920125276,42118.15,-0.5788184999999999,-0.5838914458273405,-0.035093062853397416,120,1,21759.88,5,0.6315548620547458,True,[],['max drawdown -58.4% exceeds the 35% stress budget']
+missing_data,Repeated OHLC gaps for several individual symbols.,PASS,0.4702217089943588,101617.84,0.016178400000000037,-0.04709316902132665,-0.008171906810471752,107,1,37293.7,5,0.6336849006193278,True,[],[]
+high_cost,Baseline prices with an extreme 100 bps cost on every trade.,PASS,0.39487591688521206,72951.31,-0.2704869,-0.27071,-0.0128262226905832,113,1,29545.5,6,0.6587835391511112,True,[],[]
+macro_contraction,Severe long- and short-cycle contraction with a 30% gross cap.,PASS,0.41600737487897277,100368.74,0.0036874000000000073,-0.007189839740242898,-0.001577911500660667,80,1,81259.59,6,0.1925667474733303,True,[],[]
