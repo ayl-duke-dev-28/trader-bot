@@ -101,8 +101,14 @@ class CommodityWalkForwardTests(unittest.TestCase):
         self.assertGreater(len(result.windows), 20)
         self.assertTrue(all(train_end < test_start for train_end, test_start in observations))
         self.assertEqual(result.summary["walk_forward_windows"], len(result.windows))
+        self.assertTrue((result.windows["test_observations"] > 0).all())
+        self.assertTrue(np.isfinite(result.windows["test_return"]).all())
         self.assertTrue(np.isfinite(result.summary["sharpe"]))
         self.assertTrue(np.isfinite(result.summary["max_drawdown"]))
+        self.assertAlmostEqual(
+            result.summary["total_return"],
+            result.summary["final_equity"] / result.summary["start_capital"] - 1.0,
+        )
 
     def test_transaction_costs_reduce_walk_forward_equity(self):
         prices = _synthetic_prices()

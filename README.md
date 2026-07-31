@@ -118,6 +118,7 @@ To deploy on a free Oracle Cloud VM see [docs/ORACLE_DEPLOY.md](docs/ORACLE_DEPL
 | Command | Description | Alpaca keys required |
 | --- | --- | --- |
 | `python scripts/backtest.py` | Run the primary live-path backtest; walk-forward ML is on by default | No |
+| `python scripts/backtest_commodities.py` | Run the commodity ETF strategy in rolling four-month out-of-sample windows | No |
 | `python scripts/fetch_macro_data.py` | Download point-in-time initial-release macro history from FRED | No Alpaca keys; requires `FRED_API_KEY` |
 | `python scripts/simulate_backtest.py` | Run the simpler current-decision simulator without walk-forward retraining | No |
 | `python scripts/stress_test.py` | Run deterministic offline market, data, cost, and macro stress scenarios | No |
@@ -198,6 +199,54 @@ python scripts/backtest.py --years 5 --out-dir reports/backtests/walk_forward_5y
 python scripts/backtest.py --years 20 --out-dir reports/backtests/walk_forward_20y
 python scripts/backtest.py --years 1 --max-symbols 50
 ```
+
+### Commodity walk-forward strategy
+
+`python scripts/backtest_commodities.py` is a separate research backtest. It
+does not pass commodity funds through the tech bot's QQQ benchmark sleeve,
+relative-strength rule, earnings blackout, or tech-sector caps.
+
+The tradable universe spans precious metals (`GLD`, `SLV`, `PPLT`), energy
+(`USO`, `BNO`, `UNG`), agriculture (`DBA`), and industrial metals (`DBB`,
+`CPER`). The strategy:
+
+- ranks positive absolute momentum over candidate 3-, 6-, and 12-month
+  lookbacks;
+- requires price to remain above its 200-session average;
+- holds the strongest two to four funds, selected using only the preceding
+  five-year training window;
+- sizes positions by inverse trailing volatility, with a 40% position cap and
+  15% annualized portfolio-volatility target;
+- holds unused capital as cash and moves fully to cash when no fund qualifies;
+- rebalances monthly and charges 10 basis points on every dollar of turnover;
+  and
+- freezes the selected parameters for the next four calendar months before
+  retraining on the next rolling prior window.
+
+The default request uses 15.5 years of prices: five years for the first training
+window followed by at least ten years of non-overlapping, four-month
+out-of-sample windows. `DBC` is the commodity benchmark and `SPY` is reported
+only as broad-market context.
+
+```bash
+python scripts/backtest_commodities.py
+
+# Reproduce from a local wide adjusted-close file. The first column is Date;
+# remaining columns must include the nine strategy tickers above.
+python scripts/backtest_commodities.py \
+  --prices-csv /path/to/adjusted_closes.csv \
+  --out-dir reports/backtests/commodities_walk_forward_10y
+```
+
+The report directory contains `summary.md`, `results.json`,
+`walk_forward_windows.csv`, `equity_curve.csv`, `daily_returns.csv`, and
+`weights.csv`. Each window records its isolated out-of-sample return, Sharpe,
+and drawdown as well as the training-only parameters selected for it.
+
+This tests exchange-traded commodity products, not spot commodities or direct
+futures execution. Futures-based products can diverge materially from spot
+returns because expiring contracts must be rolled; contango, backwardation,
+fees, and fund construction remain embedded in the adjusted ETF price history.
 
 ### Economic-cycle overlay
 
@@ -369,6 +418,7 @@ Important tracked files:
 - `docs/design-volatility-targeted-exposure.md` — approved, not-yet-implemented
   volatility-targeting experiment
 - `scripts/backtest.py` — live-path historical backtester
+- `scripts/backtest_commodities.py` — four-month commodity walk-forward runner
 - `scripts/fetch_macro_data.py` — downloads initial-release FRED macro history
 - `scripts/simulate_backtest.py` — simulation report runner
 - `scripts/stress_test.py` — deterministic offline stress-suite runner
@@ -455,6 +505,8 @@ src/
   risk/validation.py     shared finite-positive price validation
   risk/var.py            historical portfolio VaR and expected-shortfall gate
   backtest/engine.py     walk-forward backtester
+  backtest/commodities.py
+                          commodity ETF strategy and walk-forward evaluator
   backtest/simulator.py  live-path historical simulator
   trade_log.py           Excel activity log writer
   trader.py              main loop
