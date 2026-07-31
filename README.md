@@ -26,9 +26,12 @@ The configured signal path is:
   disabled.
 - **Politician disclosures** — implemented but disabled. Their configured
   weight is only used by the fallback weighted blend.
-- **Economic-cycle overlay** — implemented for backtests but disabled by
-  default. It combines growth, inflation, unemployment, and interest rates into
-  separate long- and short-cycle scores and can only reduce gross exposure.
+- **Economic-cycle overlay** — enabled for paper/live trading and available in
+  backtests. It combines growth, inflation, unemployment, and interest rates
+  into separate long- and short-cycle scores and can only reduce gross exposure.
+- **Dynamic sector-risk overlay** — enabled. Sector breadth versus the 50-day
+  SMA and median 20-day realized volatility can reduce new single-name position
+  sizes; static sector position-count caps remain a separate safeguard.
 - **Historical portfolio VaR gate** — enabled for paper trading and backtests.
   It blocks projected buys when one-day 99% historical VaR exceeds 3% of equity
   or expected shortfall exceeds 4%; sells are never blocked.
@@ -46,6 +49,10 @@ The configured signal path is:
 - Market regime filter: `QQQ` above/below its `200`-day SMA
 - Benchmark core: `QQQ`, `50%` target in risk-on regimes
 - Relative strength: enabled versus `QQQ` over `63` trading days
+- Macro cycle: enabled; neutral and contraction regimes cap gross exposure at
+  `60%` and `30%`, after the existing QQQ trend cap
+- Sector risk: enabled; below-40% breadth halves new-position size, annualized
+  sector volatility above 50% scales it down further, with a 25% multiplier floor
 - Daily loss kill switch: `3%`
 - Stops: ATR-scaled, floored at `4%`, capped at `12%`
 - Trailing lock: arms at an `8%` gain and exits after a `4%` giveback
@@ -284,6 +291,11 @@ python scripts/backtest.py \
   --out-dir reports/backtests/macro_cycles_20y
 ```
 
+The same downloaded file is used by `scripts/run_paper.py`. Refresh it at least
+monthly. If the file is missing, malformed, or more than 75 days old, the bot
+logs a warning and retains the existing QQQ market-regime controls instead of
+making a decision from stale macro data.
+
 The four monthly inputs are:
 
 - growth: year-over-year industrial production (`INDPRO`);
@@ -302,6 +314,22 @@ its historical availability date. Do not substitute a latest-revision FRED CSV:
 that would introduce revision and look-ahead bias. The equity report records
 the daily macro regime, both cycle scores, the composite score, and the applied
 gross-exposure cap.
+
+### Dynamic sector risk
+
+Before sizing a new equity position, the bot groups symbols using
+`src/data/sectors.py` and measures each group across members with enough price
+history:
+
+- breadth: fraction of members trading at or above their 50-day SMA;
+- risk: median annualized volatility from the latest 20 daily returns.
+
+If fewer than three group members have usable history, the overlay is neutral.
+Otherwise breadth below 40% applies a 0.50 size multiplier, and sector
+volatility above 50% applies `50% / observed volatility`; the stricter result
+wins, bounded below at 0.25. This affects new buys only. It does not enlarge
+positions, liquidate holdings, replace VaR, or replace static sector caps. Buy
+reasons record the multiplier, breadth, and sector volatility for auditability.
 
 New backtest reports include daily P/L diagnostics in addition to total return,
 Sharpe, and max drawdown:
@@ -518,6 +546,7 @@ src/
                           disabled breakout strategy implementation
   politicians/tracker.py STOCK Act feeds -> per-symbol signal
   risk/manager.py        sizing, kill switch, stop-losses
+  risk/sector.py         dynamic sector breadth/volatility sizing overlay
   risk/state.py          persisted risk state helpers
   risk/validation.py     shared finite-positive price validation
   risk/var.py            historical portfolio VaR and expected-shortfall gate

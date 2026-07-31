@@ -245,6 +245,10 @@ def test_trade_once_passes_alpaca_price_fallback_to_quote_loader():
     risk = MagicMock()
     risk.apply_portfolio_drawdown_guard.return_value = False
     risk.size_orders.return_value = []
+    macro_cycles = pd.DataFrame(
+        {"regime": ["neutral"]},
+        index=[pd.Timestamp("2026-06-30")],
+    )
 
     with (
         patch("src.trader.AlpacaBroker", return_value=broker),
@@ -253,6 +257,7 @@ def test_trade_once_passes_alpaca_price_fallback_to_quote_loader():
         patch("src.trader.load_universe", return_value=["GOOD"]),
         patch("src.trader._history_for_all", return_value={}),
         patch("src.trader.compute_signals", return_value={"GOOD": 1.0}),
+        patch("src.trader._load_live_macro_cycles", return_value=macro_cycles),
         patch("src.trader._last_prices", return_value={"GOOD": 100.0}) as price_loader,
     ):
         from src.trader import trade_once
@@ -260,6 +265,7 @@ def test_trade_once_passes_alpaca_price_fallback_to_quote_loader():
         trade_once(DummyConfig())
 
     price_loader.assert_called_once_with(["GOOD"], fallback=broker.latest_prices)
+    assert risk.size_orders.call_args.kwargs["macro_cycles"] is macro_cycles
 
 
 def test_size_orders_skips_non_finite_quote():

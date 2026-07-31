@@ -22,8 +22,10 @@ import pandas as pd
 
 from src.broker.alpaca_client import AlpacaBroker, Position
 from src.config import Config, ROOT
+from src.data.macro import macro_exposure_cap
 from src.data.sectors import sector_for
 from src.risk.indicators import gap_pct, latest_atr_pct
+from src.risk.sector import calculate_sector_risk
 from src.risk.state import RiskState
 from src.risk.validation import is_valid_price
 from src.risk.var import filter_buy_intents_by_var
@@ -216,6 +218,8 @@ class RiskManager:
         scores: dict[str, float],
         prices: dict[str, float],
         history: dict[str, pd.DataFrame] | None = None,
+        macro_cycles: pd.DataFrame | None = None,
+        as_of: pd.Timestamp | None = None,
     ) -> list[TradeIntent]:
         history = history or {}
         acct = self.broker.account()
@@ -223,11 +227,20 @@ class RiskManager:
         max_pos_pct = float(self._r("max_position_pct", default=0.05))
         normal_max_gross_pct = float(self._r("max_gross_exposure", default=0.80))
         max_gross_pct = self._regime_adjusted_max_gross_pct(history, normal_max_gross_pct)
+        max_gross_pct = self._macro_adjusted_max_gross_pct(
+            macro_cycles,
+            as_of=as_of or _latest_history_date(history),
+            current_max_gross_pct=max_gross_pct,
+        )
         max_positions = int(self._r("max_positions", default=20))
         entry_thr = float(self._r("entry_score_threshold", default=0.35))
         exit_thr = float(self._r("exit_score_threshold", default=0.0))
         gap_skip = float(self._r("gap_skip_pct", default=0.05))
         sector_caps = dict(self._r("sector_caps", default={}) or {})
+        sector_risks = calculate_sector_risk(
+            history,
+            self._r("sector_risk", default={}) or {},
+        )
 
         held = {p.symbol: p for p in self.broker.positions()}
         held_value = sum(p.market_value for p in held.values())
@@ -323,7 +336,12 @@ class RiskManager:
 
             # Size: score-scaled with a 50% floor so eligible names get real capital.
             strength = max(0.5, min(1.0, score))
-            target = min(max_per_position_dollars * strength, remaining_gross)
+            sector_risk = sector_risks.get(sector)
+            sector_multiplier = sector_risk.multiplier if sector_risk is not None else 1.0
+            target = min(
+                max_per_position_dollars * strength * sector_multiplier,
+                remaining_gross,
+            )
             existing = held[sym].market_value if sym in held else 0.0
             delta = target - existing
             if delta < max(MIN_TRADE_DOLLARS, max_per_position_dollars * 0.1):
@@ -333,9 +351,14 @@ class RiskManager:
                 log.info("[SKIP] %s delta $%.0f < price $%.2f", sym, delta, price)
                 continue
 
-            intents.append(
-                TradeIntent(sym, "buy", delta, f"score={score:+.2f} sector={sector}")
-            )
+            reason = f"score={score:+.2f} sector={sector}"
+            if sector_risk is not None:
+                reason += (
+                    f" sector_risk={sector_multiplier:.2f}"
+                    f" breadth={sector_risk.breadth:.0%}"
+                    f" sector_vol={sector_risk.annualized_volatility:.0%}"
+                )
+            intents.append(TradeIntent(sym, "buy", delta, reason))
             remaining_gross -= delta
             open_slots -= 1
             sector_used[sector] = sector_used.get(sector, 0) + 1
@@ -498,6 +521,33 @@ class RiskManager:
         )
         return adjusted
 
+    def _macro_adjusted_max_gross_pct(
+        self,
+        cycles: pd.DataFrame | None,
+        *,
+        as_of: pd.Timestamp,
+        current_max_gross_pct: float,
+    ) -> float:
+        macro_cfg = self._r("macro_cycle", default={}) or {}
+        if not bool(macro_cfg.get("enabled", False)) or cycles is None or cycles.empty:
+            return current_max_gross_pct
+        adjusted = macro_exposure_cap(
+            cycles,
+            as_of,
+            normal_max_gross=current_max_gross_pct,
+            config=macro_cfg,
+        )
+        if adjusted < current_max_gross_pct:
+            current = cycles.loc[cycles.index <= pd.Timestamp(as_of)]
+            regime = "unknown" if current.empty else str(current.iloc[-1]["regime"])
+            log.info(
+                "macro %s regime: max gross %.0f%% -> %.0f%%",
+                regime,
+                current_max_gross_pct * 100,
+                adjusted * 100,
+            )
+        return adjusted
+
     # --- utils ------------------------------------------------------------
 
     @staticmethod
@@ -529,3 +579,11 @@ def _lookback_return(hist: pd.DataFrame, lookback: int) -> float | None:
     if start <= 0 or end <= 0:
         return None
     return float(end / start - 1.0)
+
+
+def _latest_history_date(history: dict[str, pd.DataFrame]) -> pd.Timestamp:
+    latest = [pd.Timestamp(frame.index.max()) for frame in history.values() if frame is not None and not frame.empty]
+    if latest:
+        value = max(latest)
+        return value.tz_localize(None) if value.tzinfo is not None else value
+    return pd.Timestamp.now().normalize()

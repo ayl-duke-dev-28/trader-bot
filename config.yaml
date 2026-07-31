@@ -78,6 +78,36 @@ risk:
     min_excess_return: 0.0
     exempt_symbols: [QQQ]
 
+  # Point-in-time macro overlay for paper/live sizing. It uses the same
+  # growth, inflation, unemployment, and interest-rate model as the backtest.
+  # Missing or >75-day-old data falls back to the QQQ market-regime cap.
+  macro_cycle:
+    enabled: true
+    data_path: data_cache/macro/fred_initial_releases.csv
+    max_data_age_days: 75
+    long_window_months: 120
+    short_window_months: 6
+    min_history_months: 36
+    long_weight: 0.6
+    short_weight: 0.4
+    inflation_target_pct: 2.0
+    expansion_threshold: 0.20
+    contraction_threshold: -0.20
+    neutral_max_gross_exposure: 0.60
+    contraction_max_gross_exposure: 0.30
+
+  # Dynamic industry risk. New positions in weak or unusually volatile
+  # buckets are smaller; this never increases position size or forces exits.
+  sector_risk:
+    enabled: true
+    sma_window: 50
+    volatility_window: 20
+    min_members: 3
+    min_breadth: 0.40
+    weak_breadth_multiplier: 0.50
+    max_annualized_vol: 0.50
+    min_multiplier: 0.25
+
   # kill switch (day-start equity persists across restarts)
   daily_loss_kill_switch_pct: 0.03
 

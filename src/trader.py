@@ -14,6 +14,7 @@ import yfinance as yf
 from src.broker.alpaca_client import AlpacaBroker, Position
 from src.config import Config, ROOT, load_config
 from src.data.earnings import near_earnings, next_earnings_dates
+from src.data.macro import load_macro_panel, macro_cycle_history
 from src.data.market_data import get_history, get_history_many
 from src.data.universe import load_universe
 from src.politicians.tracker import politician_signals
@@ -28,6 +29,55 @@ from src.trade_log import TradeLogEntry, TradeLogger, trade_logger_from_config
 log = logging.getLogger(__name__)
 
 DEFAULT_MARKET_TZ = "America/New_York"
+
+
+def _load_live_macro_cycles(cfg: Config) -> pd.DataFrame | None:
+    """Load the configured point-in-time macro panel for live/paper sizing."""
+    macro_cfg = cfg.get("risk", "macro_cycle", default={}) or {}
+    if not bool(macro_cfg.get("enabled", False)):
+        return None
+    configured_path = macro_cfg.get("data_path")
+    if not configured_path:
+        log.warning("macro overlay unavailable: risk.macro_cycle.data_path is not configured")
+        return None
+    path = Path(configured_path)
+    if not path.is_absolute():
+        path = ROOT / path
+    try:
+        panel = load_macro_panel(path)
+    except (OSError, ValueError) as exc:
+        log.warning("macro overlay unavailable from %s: %s", path, exc)
+        return None
+    if panel.empty:
+        log.warning("macro overlay unavailable: %s contains no observations", path)
+        return None
+
+    max_age_days = max(1, int(macro_cfg.get("max_data_age_days", 75)))
+    latest_release = pd.Timestamp(panel.index.max())
+    today = pd.Timestamp.now().normalize()
+    if latest_release.tzinfo is not None:
+        latest_release = latest_release.tz_localize(None)
+    age_days = (today - latest_release.normalize()).days
+    if age_days > max_age_days:
+        log.warning(
+            "macro overlay unavailable: latest release is %d days old (limit=%d)",
+            age_days,
+            max_age_days,
+        )
+        return None
+
+    cycles = macro_cycle_history(panel, macro_cfg)
+    if cycles.empty:
+        log.warning("macro overlay unavailable: cycle model produced no observations")
+        return None
+    current = cycles.iloc[-1]
+    log.info(
+        "macro overlay loaded: regime=%s composite=%+.2f release=%s",
+        current["regime"],
+        current["composite_score"],
+        latest_release.date(),
+    )
+    return cycles
 
 
 def _consolidate_intents(intents: list[TradeIntent]) -> list[TradeIntent]:
@@ -223,6 +273,7 @@ def trade_once(cfg: Config) -> None:
     log.info("evaluating %d symbols", len(symbols))
     held_symbols = [p.symbol for p in broker.positions()]
     history = _history_for_all(cfg, symbols, held_symbols)
+    macro_cycles = _load_live_macro_cycles(cfg)
 
     risk.apply_stop_losses(history=history, dry_run=dry, mode=mode)
     if risk.apply_portfolio_drawdown_guard(dry_run=dry, mode=mode):
@@ -230,7 +281,14 @@ def trade_once(cfg: Config) -> None:
 
     scores = compute_signals(cfg, symbols, history=history)
     prices = _last_prices(symbols, fallback=broker.latest_prices)
-    intents = _consolidate_intents(risk.size_orders(scores, prices, history=history))
+    intents = _consolidate_intents(
+        risk.size_orders(
+            scores,
+            prices,
+            history=history,
+            macro_cycles=macro_cycles,
+        )
+    )
     intents = _apply_earnings_blackout(cfg, intents)
 
     if not intents:

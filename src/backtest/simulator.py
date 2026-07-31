@@ -15,6 +15,7 @@ from src.config import Config
 from src.data.macro import macro_cycle_at, macro_exposure_cap
 from src.data.sectors import sector_for
 from src.risk.indicators import gap_pct, latest_atr_pct
+from src.risk.sector import calculate_sector_risk
 from src.risk.var import estimate_historical_risk, filter_buy_intents_by_var
 from src.signals.classical import classical_signal
 from src.signals.hedge_fund import hedge_fund_decision
@@ -385,13 +386,14 @@ def simulate_current_bot(
     trailing_giveback = float(_cfg_r(cfg, "trailing_giveback_pct", default=0.04))
     earnings_blackout_days = int(_cfg_r(cfg, "earnings_blackout_days", default=0))
     sector_caps = dict(_cfg_r(cfg, "sector_caps", default={}) or {})
+    sector_risk_cfg = _cfg_r(cfg, "sector_risk", default={}) or {}
     signal_history_bars = int(cfg.get("data", "history_days", default=400))
     drawdown_guard_cfg = _cfg_r(cfg, "portfolio_drawdown_guard", default={}) or {}
     drawdown_guard_enabled = bool(drawdown_guard_cfg.get("enabled", False))
     drawdown_guard_max = float(drawdown_guard_cfg.get("max_drawdown_pct", 1.0))
     var_cfg = _cfg_r(cfg, "value_at_risk", default={}) or {}
     var_enabled = bool(var_cfg.get("enabled", False))
-    macro_cfg = macro_cycle_config or {}
+    macro_cfg = macro_cycle_config or (_cfg_r(cfg, "macro_cycle", default={}) or {})
     macro_enabled = bool(macro_cfg.get("enabled", False)) and macro_cycles is not None and not macro_cycles.empty
 
     cash = float(start_capital)
@@ -641,6 +643,14 @@ def simulate_current_bot(
             ((sym, float(score)) for sym, score in scores.items() if float(score) >= entry_thr),
             key=lambda item: -item[1],
         )
+        sector_risks = calculate_sector_risk(
+            {
+                sym: frame.loc[:date]
+                for sym, frame in history.items()
+                if not frame.loc[:date].empty
+            },
+            sector_risk_cfg,
+        )
         for sym, score in candidates:
             if open_slots <= 0 or remaining_gross <= 100.0:
                 break
@@ -662,7 +672,9 @@ def simulate_current_bot(
                 continue
 
             strength = max(0.5, min(1.0, score))
-            target = min(max_per_position * strength, remaining_gross)
+            sector_risk = sector_risks.get(sector)
+            sector_multiplier = sector_risk.multiplier if sector_risk is not None else 1.0
+            target = min(max_per_position * strength * sector_multiplier, remaining_gross)
             existing = positions[sym].market_value(price) if sym in positions else 0.0
             delta = target - existing
             if delta < max(100.0, max_per_position * 0.1) or delta < price:
@@ -692,7 +704,14 @@ def simulate_current_bot(
             if old_qty == 0:
                 open_slots -= 1
                 sector_used[sector] = sector_used.get(sector, 0) + 1
-            log_trade(date, "BUY", sym, qty, price, score, f"score={score:+.2f} sector={sector}")
+            reason = f"score={score:+.2f} sector={sector}"
+            if sector_risk is not None:
+                reason += (
+                    f" sector_risk={sector_multiplier:.2f}"
+                    f" breadth={sector_risk.breadth:.0%}"
+                    f" sector_vol={sector_risk.annualized_volatility:.0%}"
+                )
+            log_trade(date, "BUY", sym, qty, price, score, reason)
 
         curve_row = {
             "date": date.date().isoformat(),

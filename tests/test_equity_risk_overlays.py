@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.broker.alpaca_client import Account
 from src.risk.manager import RiskManager
 from src.risk.sector import calculate_sector_risk
+from src.trader import _load_live_macro_cycles
 
 
 def _close_history(values: list[float]) -> pd.DataFrame:
@@ -47,7 +48,7 @@ def _sector_config(**overrides):
 def test_sector_risk_combines_breadth_and_realized_volatility():
     rising = np.linspace(100.0, 125.0, 60).tolist()
     falling = np.linspace(125.0, 90.0, 60).tolist()
-    volatile = (100.0 * np.exp(np.cumsum([0.04, -0.04] * 30))).tolist()
+    volatile = (100.0 * np.exp(np.cumsum([0.06, -0.04] * 30))).tolist()
     history = {
         "AAPL": _close_history(falling),
         "MSFT": _close_history(falling),
@@ -167,3 +168,61 @@ def test_live_buy_size_is_reduced_in_a_weak_sector():
     assert intents[0].symbol == "AAPL"
     assert intents[0].target_dollars == 2_500.0
     assert "sector_risk=0.50" in intents[0].reason
+
+
+def test_live_macro_loader_builds_cycles_from_fresh_point_in_time_cache(tmp_path):
+    dates = pd.date_range(end=pd.Timestamp.now().normalize(), periods=48, freq="MS")
+    panel = pd.DataFrame(
+        {
+            "available_date": dates,
+            "growth": np.linspace(1.0, 3.0, len(dates)),
+            "inflation": np.linspace(3.0, 2.0, len(dates)),
+            "unemployment": np.linspace(5.0, 4.0, len(dates)),
+            "interest_rate": np.linspace(4.0, 3.0, len(dates)),
+        }
+    )
+    path = tmp_path / "macro.csv"
+    panel.to_csv(path, index=False)
+
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            if keys == ("risk", "macro_cycle"):
+                return {
+                    "enabled": True,
+                    "data_path": str(path),
+                    "max_data_age_days": 75,
+                    "long_window_months": 36,
+                    "short_window_months": 3,
+                    "min_history_months": 24,
+                }
+            return default
+
+    cycles = _load_live_macro_cycles(DummyConfig())
+
+    assert cycles is not None
+    assert cycles.iloc[-1]["regime"] in {"expansion", "neutral", "contraction"}
+
+
+def test_live_macro_loader_rejects_stale_cache(tmp_path):
+    path = tmp_path / "macro.csv"
+    pd.DataFrame(
+        {
+            "available_date": ["2020-01-01"],
+            "growth": [2.0],
+            "inflation": [2.0],
+            "unemployment": [4.0],
+            "interest_rate": [2.0],
+        }
+    ).to_csv(path, index=False)
+
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            if keys == ("risk", "macro_cycle"):
+                return {
+                    "enabled": True,
+                    "data_path": str(path),
+                    "max_data_age_days": 75,
+                }
+            return default
+
+    assert _load_live_macro_cycles(DummyConfig()) is None
