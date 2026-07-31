@@ -14,6 +14,7 @@ from src.backtest.commodities import (
     CommodityParameters,
     build_walk_forward_windows,
     commodity_target_weights,
+    default_diversified_candidates,
     run_commodity_walk_forward,
 )
 
@@ -80,6 +81,29 @@ class CommodityWalkForwardTests(unittest.TestCase):
         self.assertLessEqual(float(weights.sum()), 1.0 + 1e-12)
         self.assertLessEqual(float(weights.max()), 0.60 + 1e-12)
         self.assertGreater(float(weights["LEADER"]), float(weights["LOSER"]))
+
+    def test_diversified_weights_cap_positions_and_correlated_commodity_groups(self):
+        index = pd.date_range("2018-01-01", periods=320, freq="B")
+        step = np.arange(len(index), dtype=float)
+        prices = pd.DataFrame(
+            {
+                "USO": 50 * np.exp(0.0012 * step),
+                "BNO": 50 * np.exp(0.0011 * step),
+                "UNG": 50 * np.exp(0.0010 * step),
+                "GLD": 50 * np.exp(0.0008 * step),
+                "DBA": 50 * np.exp(0.0007 * step),
+                "CPER": 50 * np.exp(0.0006 * step),
+            },
+            index=index,
+        )
+        parameters = default_diversified_candidates()[0]
+
+        weights = commodity_target_weights(prices, parameters)
+
+        self.assertLessEqual(float(weights.max()), 0.25 + 1e-12)
+        self.assertLessEqual(float(weights[["USO", "BNO", "UNG"]].sum()), 0.35 + 1e-12)
+        self.assertGreaterEqual(int((weights > 0).sum()), 4)
+        self.assertLessEqual(float(weights.sum()), 1.0 + 1e-12)
 
     def test_walk_forward_selection_never_receives_test_or_future_prices(self):
         prices = _synthetic_prices()

@@ -223,13 +223,24 @@ The tradable universe spans precious metals (`GLD`, `SLV`, `PPLT`), energy
 - freezes the selected parameters for the next four calendar months before
   retraining on the next rolling prior window.
 
+The default command now compares that baseline with a diversified variant. The
+variant selects five to nine qualifying funds, caps each position at 25%, and
+caps each correlated commodity group at 35%. The group limits keep precious
+metals, energy, industrial metals, or agriculture from dominating the risk
+budget merely because several closely related funds have the same trend.
+
 The default request uses 15.5 years of prices: five years for the first training
 window followed by at least ten years of non-overlapping, four-month
-out-of-sample windows. `DBC` is the commodity benchmark and `SPY` is reported
-only as broad-market context.
+out-of-sample windows. `DBC` is the commodity benchmark; `SPY`, `VOO`, `QQQ`,
+and `QQQM` are reported as market context. Because `QQQM` began in October
+2020, its output explicitly shows a shorter start date; `QQQ` supplies the
+full-window Nasdaq-100 comparison.
 
 ```bash
 python scripts/backtest_commodities.py
+
+# Run only one portfolio construction method.
+python scripts/backtest_commodities.py --variant diversified
 
 # Reproduce from a local wide adjusted-close file. The first column is Date;
 # remaining columns must include the nine strategy tickers above.
@@ -238,7 +249,9 @@ python scripts/backtest_commodities.py \
   --out-dir reports/backtests/commodities_walk_forward_10y
 ```
 
-The report directory contains `summary.md`, `results.json`,
+The comparison report writes `comparison.md`, `comparison.json`, the downloaded
+`adjusted_closes.csv`, and separate `baseline/` and `diversified/` directories.
+Each variant directory contains `summary.md`, `results.json`,
 `walk_forward_windows.csv`, `equity_curve.csv`, `daily_returns.csv`, and
 `weights.csv`. Each window records its isolated out-of-sample return, Sharpe,
 and drawdown as well as the training-only parameters selected for it.

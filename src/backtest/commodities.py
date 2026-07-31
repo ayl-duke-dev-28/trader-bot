@@ -17,6 +17,19 @@ import numpy as np
 import pandas as pd
 
 
+COMMODITY_GROUPS = {
+    "GLD": "precious_metals",
+    "SLV": "precious_metals",
+    "PPLT": "precious_metals",
+    "USO": "energy",
+    "BNO": "energy",
+    "UNG": "energy",
+    "DBA": "agriculture",
+    "DBB": "industrial_metals",
+    "CPER": "industrial_metals",
+}
+
+
 @dataclass(frozen=True)
 class CommodityParameters:
     momentum_days: int
@@ -25,6 +38,7 @@ class CommodityParameters:
     volatility_days: int = 60
     target_volatility: float = 0.15
     max_position: float = 0.40
+    max_group: float = 1.00
 
 
 @dataclass(frozen=True)
@@ -103,6 +117,22 @@ def _capped_weights(raw: pd.Series, cap: float) -> pd.Series:
     return result
 
 
+def _apply_group_cap(weights: pd.Series, cap: float) -> pd.Series:
+    """Reduce correlated commodity groups to a shared cap, leaving excess cash."""
+    if cap >= 1.0:
+        return weights
+    result = weights.copy()
+    groups: dict[str, list[str]] = {}
+    for symbol in result.index:
+        group = COMMODITY_GROUPS.get(str(symbol).upper(), str(symbol).upper())
+        groups.setdefault(group, []).append(symbol)
+    for symbols in groups.values():
+        group_weight = float(result.loc[symbols].sum())
+        if group_weight > cap:
+            result.loc[symbols] *= cap / group_weight
+    return result
+
+
 def commodity_target_weights(
     prices: pd.DataFrame,
     parameters: CommodityParameters,
@@ -131,6 +161,7 @@ def commodity_target_weights(
     selected = sorted(eligible, key=lambda symbol: eligible[symbol][0], reverse=True)[: parameters.top_n]
     inverse_vol = pd.Series({symbol: 1.0 / eligible[symbol][1] for symbol in selected})
     weights = _capped_weights(inverse_vol, parameters.max_position)
+    weights = _apply_group_cap(weights, parameters.max_group)
 
     recent_returns = clean[selected].pct_change(fill_method=None).dropna(how="any").iloc[-parameters.volatility_days:]
     if len(recent_returns) >= 2:
@@ -237,6 +268,20 @@ def default_commodity_candidates() -> list[CommodityParameters]:
         CommodityParameters(momentum_days=momentum, top_n=top_n)
         for momentum in (63, 126, 252)
         for top_n in (2, 3, 4)
+    ]
+
+
+def default_diversified_candidates() -> list[CommodityParameters]:
+    """Broader variants with smaller single-name and commodity-group limits."""
+    return [
+        CommodityParameters(
+            momentum_days=momentum,
+            top_n=top_n,
+            max_position=0.25,
+            max_group=0.35,
+        )
+        for momentum in (63, 126, 252)
+        for top_n in (5, 7, 9)
     ]
 
 

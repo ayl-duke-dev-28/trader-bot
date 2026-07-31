@@ -48,12 +48,25 @@ fallback is both written and reused without another download.
 
 ## Data-run status and known gap
 
-The real-data command was attempted on 2026-07-31. The sandbox could not
-resolve Yahoo's host, and none of the eleven required adjusted-close histories
-were already cached. No synthetic performance figures were substituted. The
-runner supports `--prices-csv` so the exact evaluation can be reproduced from a
-local wide adjusted-close export when network access is available.
+The first sandbox attempt could not resolve Yahoo's host. The user then ran the
+same command in a network-enabled terminal, producing 31 completed four-month
+windows from 2015-12-16 through 2026-04-15. The retained raw report and analysis
+contain the measured baseline results. The runner also supports `--prices-csv`
+and now retains `adjusted_closes.csv` for exact variant reproduction.
 
 This implementation tests commodity ETF returns. It does not model direct
 futures margin, contract selection, or a separate futures roll engine; roll and
 fund expenses are reflected only through the ETF price series.
+
+## Diversification follow-up
+
+The retained baseline averaged only 2.21 effective positions. Precious metals
+averaged 28.30% of capital while agriculture averaged 4.49%; one losing window
+held 67.57% in precious metals and another held 57.94% in industrial metals.
+This motivated a diversified variant rather than adding leverage.
+
+A new test first failed because `default_diversified_candidates` did not exist.
+It now proves the variant holds at least four qualifying assets in the supplied
+scenario, caps individual funds at 25%, caps the energy group at 35%, remains
+long-only, and never exceeds 100% gross exposure. The original five commodity
+tests and the new diversification test pass together.
