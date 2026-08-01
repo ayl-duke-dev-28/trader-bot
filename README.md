@@ -176,8 +176,15 @@ next scheduled slot is used.
 
 - fetches the configured universe plus warmup history;
 - runs the currently configured strategy stack from `config.yaml`;
-- replays the live-path risk rules: sizing, sector caps, stop/trailing exits,
-  cooldowns, whole/fractional-share sizing, and trading costs.
+- replays the QQQ market-regime and benchmark-core rules;
+- applies relative strength, static sector caps, dynamic sector
+  breadth/volatility sizing, earnings and gap filters, and portfolio VaR;
+- replays position sizing, stop/trailing exits, cooldowns,
+  whole/fractional-share execution, and trading costs.
+
+The economic-cycle overlay is not enabled by default for historical runs even
+though it is enabled for paper/live trading. Supply `--macro-data` (or enable
+`backtest.macro_cycle`) so the backtest uses point-in-time macro observations.
 
 When ML is enabled, the backtester does **not** use a single model trained on the
 full dataset. It trains ML only on rolling prior windows and tests only the
@@ -347,15 +354,18 @@ These are risk diagnostics, not an optimization guarantee. A strategy can have
 zero losing days by staying in cash, but any active long-equity strategy should
 expect some negative mark-to-market days.
 
-Current saved strategy reports are limited to the retained benchmark and
-walk-forward runs. Temporary parameter-comparison reports are not retained.
+The saved equity reports below predate the live macro-cycle and dynamic
+sector-risk overlays. They remain useful as pre-overlay baselines, but they are
+not results for the current configuration. Replace or supplement them with a
+new walk-forward run before judging the return or drawdown impact of the new
+risk rules. Temporary parameter-comparison reports are not retained.
 
 | Report | Period | Final equity | CAGR | Sharpe | Max drawdown | Notes |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
-| `reports/backtests/benchmark_aware_5y/` | `2021-07-08` to `2026-07-07` | `$165,185.92` | `10.57%` | `0.8520` | `-20.32%` | Benchmark-core and relative-strength risk layers |
-| `reports/backtests/walk_forward_5y/` | `2021-07-09` to `2026-07-09` | `$168,761.46` | `11.04%` | `0.8857` | `-21.26%` | Selected `0.55` entry threshold; 29 walk-forward ML windows |
-| `reports/backtests/walk_forward_20y/` | `2006-07-10` to `2026-07-09` | `$511,336.91` | `8.50%` | `0.7187` | `-21.08%` | 116 walk-forward ML windows |
-| `reports/backtests/daily_metrics_1y_qqq/` | `2025-07-14` to `2026-07-13` | `$130,358.84` | `30.48%` | `1.7966` | `-6.84%` | 1-year daily P/L diagnostic |
+| `reports/backtests/benchmark_aware_5y/` | `2021-07-08` to `2026-07-07` | `$165,185.92` | `10.57%` | `0.8520` | `-20.32%` | Pre-overlay baseline; benchmark core and relative strength |
+| `reports/backtests/walk_forward_5y/` | `2021-07-09` to `2026-07-09` | `$168,761.46` | `11.04%` | `0.8857` | `-21.26%` | Pre-overlay baseline; 29 walk-forward ML windows |
+| `reports/backtests/walk_forward_20y/` | `2006-07-10` to `2026-07-09` | `$511,336.91` | `8.50%` | `0.7187` | `-21.08%` | Pre-overlay baseline; 116 walk-forward ML windows |
+| `reports/backtests/daily_metrics_1y_qqq/` | `2025-07-14` to `2026-07-13` | `$130,358.84` | `30.48%` | `1.7966` | `-6.84%` | Pre-overlay 1-year daily P/L diagnostic |
 
 The remaining report files are `summary.txt`, `equity_curve.csv`, and
 `trades.csv` for each report. `walk_forward_20y` also has `benchmarks.csv`.
@@ -526,10 +536,10 @@ models/
 data_cache/
   state/risk_state.json  day equity, stop cooldowns, and high-water marks (ignored)
 reports/backtests/
-  benchmark_aware_5y/    current-strategy 5-year benchmark-aware run
-  walk_forward_5y/       current-strategy 5-year walk-forward run
-  walk_forward_20y/      current-strategy 20-year walk-forward run
-  daily_metrics_1y_qqq/  current-strategy 1-year daily metrics run
+  benchmark_aware_5y/    pre-overlay 5-year benchmark-aware baseline
+  walk_forward_5y/       pre-overlay 5-year walk-forward baseline
+  walk_forward_20y/      pre-overlay 20-year walk-forward baseline
+  daily_metrics_1y_qqq/  pre-overlay 1-year daily metrics baseline
 logs/
   trader.log             runtime log (ignored)
   trades.xlsx            activity log workbook (ignored)
