@@ -466,6 +466,143 @@ def test_benchmark_core_honors_stop_cooldown():
     assert intent is None
 
 
+def test_risk_on_benchmark_core_ignores_negative_score_exit():
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            values = {
+                ("risk", "max_position_pct"): 0.05,
+                ("risk", "max_gross_exposure"): 0.80,
+                ("risk", "max_positions"): 20,
+                ("risk", "entry_score_threshold"): 0.55,
+                ("risk", "exit_score_threshold"): 0.0,
+                ("risk", "gap_skip_pct"): 0.05,
+                ("risk", "sector_caps"): {"etf_tech": 3},
+                ("risk", "market_regime"): {
+                    "enabled": True,
+                    "benchmark_symbol": "QQQ",
+                    "sma_window": 20,
+                    "risk_off_max_gross_exposure": 0.20,
+                },
+                ("risk", "macro_cycle"): {"enabled": False},
+                ("risk", "benchmark_core"): {
+                    "enabled": True,
+                    "symbol": "QQQ",
+                    "risk_on_target_pct": 0.50,
+                    "risk_off_target_pct": 0.0,
+                    "min_trade_dollars": 100,
+                },
+                ("risk", "relative_strength"): {"enabled": False},
+                ("risk", "sector_risk"): {"enabled": False},
+                ("risk", "value_at_risk"): {"enabled": False},
+            }
+            return values.get(keys, default)
+
+    class DummyBroker:
+        @staticmethod
+        def account():
+            return Account(100_000.0, 100_000.0, 50_000.0, 50_000.0)
+
+        @staticmethod
+        def positions():
+            return [Position("QQQ", 500.0, 100.0, 50_000.0, 0.0)]
+
+    class DummyState:
+        @staticmethod
+        def portfolio_guard_tripped():
+            return False
+
+        @staticmethod
+        def day_start_equity(equity):
+            return equity
+
+        @staticmethod
+        def in_cooldown(symbol):
+            return False
+
+    idx = pd.date_range("2026-01-01", periods=60, freq="B")
+    qqq = pd.DataFrame({"close": np.linspace(100.0, 130.0, len(idx))}, index=idx)
+    risk = RiskManager(DummyConfig(), DummyBroker(), state=DummyState())
+
+    intents = risk.size_orders(
+        scores={"QQQ": -0.20},
+        prices={"QQQ": 100.0},
+        history={"QQQ": qqq},
+    )
+
+    assert intents == []
+
+
+def test_backtest_does_not_churn_risk_on_benchmark_core_on_neutral_score():
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            values = {
+                ("execution", "fractional_shares"): True,
+                ("strategies", "momentum_breakout", "enabled"): False,
+                ("strategies", "hedge_fund", "enabled"): False,
+                ("strategies", "classical", "enabled"): False,
+                ("strategies", "classical", "weight"): 0.0,
+                ("strategies", "ml", "enabled"): False,
+                ("strategies", "ml", "weight"): 0.0,
+                ("strategies", "politicians", "enabled"): False,
+                ("risk", "max_position_pct"): 0.05,
+                ("risk", "max_gross_exposure"): 0.80,
+                ("risk", "max_positions"): 20,
+                ("risk", "entry_score_threshold"): 0.55,
+                ("risk", "exit_score_threshold"): 0.0,
+                ("risk", "gap_skip_pct"): 0.99,
+                ("risk", "cooldown_days"): 3,
+                ("risk", "trailing_activate_pct"): 10.0,
+                ("risk", "trailing_giveback_pct"): 1.0,
+                ("risk", "earnings_blackout_days"): 0,
+                ("risk", "stop_atr_mult"): 100.0,
+                ("risk", "stop_min_pct"): 0.99,
+                ("risk", "stop_max_pct"): 0.99,
+                ("risk", "sector_caps"): {"etf_tech": 3},
+                ("risk", "market_regime"): {"enabled": False},
+                ("risk", "macro_cycle"): {"enabled": False},
+                ("risk", "benchmark_core"): {
+                    "enabled": True,
+                    "symbol": "QQQ",
+                    "risk_on_target_pct": 0.50,
+                    "risk_off_target_pct": 0.0,
+                    "min_trade_dollars": 100,
+                },
+                ("risk", "relative_strength"): {"enabled": False},
+                ("risk", "sector_risk"): {"enabled": False},
+                ("risk", "value_at_risk"): {"enabled": False},
+                ("risk", "portfolio_drawdown_guard"): {"enabled": False},
+                ("data", "history_days"): 80,
+                ("backtest", "warmup_days"): 0,
+            }
+            return values.get(keys, default)
+
+    idx = pd.date_range("2025-01-01", periods=90, freq="B")
+    close = np.linspace(100.0, 120.0, len(idx))
+    qqq = pd.DataFrame(
+        {
+            "open": close,
+            "high": close * 1.01,
+            "low": close * 0.99,
+            "close": close,
+            "volume": 1_000_000,
+        },
+        index=idx,
+    )
+
+    result = backtest(
+        DummyConfig(),
+        {"QQQ": qqq},
+        start_date=idx[60],
+        start_capital=100_000.0,
+        cost_bps=0.0,
+        walk_forward=False,
+    )
+
+    assert result.summary is not None
+    assert result.summary["buys"] == 1
+    assert result.summary["sells"] == 0
+
+
 def test_relative_strength_blocks_lagging_symbol():
     class DummyConfig:
         def get(self, *keys, default=None):
