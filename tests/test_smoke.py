@@ -559,6 +559,41 @@ def test_benchmark_core_still_exits_when_regime_target_is_zero():
     assert intents[0].reason == "benchmark core risk-off target=0"
 
 
+def test_benchmark_core_target_distinguishes_market_and_macro_regimes():
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            if keys == ("risk", "benchmark_core"):
+                return {
+                    "enabled": True,
+                    "risk_on_target_pct": 0.50,
+                    "neutral_target_pct": 0.50,
+                    "contraction_target_pct": 0.0,
+                    "risk_off_target_pct": 0.0,
+                }
+            return default
+
+    risk = RiskManager(DummyConfig(), broker=object(), state=object())
+
+    assert risk._benchmark_core_target_pct(
+        0.60,
+        0.80,
+        market_risk_on=True,
+        macro_regime="neutral",
+    ) == 0.50
+    assert risk._benchmark_core_target_pct(
+        0.30,
+        0.80,
+        market_risk_on=True,
+        macro_regime="contraction",
+    ) == 0.0
+    assert risk._benchmark_core_target_pct(
+        0.20,
+        0.80,
+        market_risk_on=False,
+        macro_regime="neutral",
+    ) == 0.0
+
+
 def test_backtest_does_not_churn_risk_on_benchmark_core_on_neutral_score():
     class DummyConfig:
         def get(self, *keys, default=None):
@@ -628,6 +663,35 @@ def test_backtest_does_not_churn_risk_on_benchmark_core_on_neutral_score():
     assert result.summary is not None
     assert result.summary["buys"] == 1
     assert result.summary["sells"] == 0
+
+    macro_cycles = pd.DataFrame(
+        {
+            "long_score": [-0.10],
+            "short_score": [-0.10],
+            "composite_score": [-0.10],
+            "regime": ["neutral"],
+        },
+        index=[idx[0]],
+    )
+    neutral_result = backtest(
+        DummyConfig(),
+        {"QQQ": qqq},
+        start_date=idx[60],
+        start_capital=100_000.0,
+        cost_bps=0.0,
+        walk_forward=False,
+        macro_cycles=macro_cycles,
+        macro_cycle_config={
+            "enabled": True,
+            "neutral_max_gross_exposure": 0.60,
+            "contraction_max_gross_exposure": 0.30,
+        },
+    )
+
+    assert neutral_result.summary is not None
+    assert neutral_result.summary["buys"] == 1
+    assert neutral_result.summary["sells"] == 0
+    assert neutral_result.summary["macro_min_gross_exposure"] == 0.60
 
 
 def test_relative_strength_blocks_lagging_symbol():
