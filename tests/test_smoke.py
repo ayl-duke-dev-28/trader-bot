@@ -322,9 +322,18 @@ def test_live_trade_cycle_routes_cap_trim_as_partial_sell_order():
         trade_once(DummyConfig())
         broker.submit_market_order.assert_called_once_with("AAPL", 100.0, "sell")
         broker.close_position.assert_not_called()
-        broker.open_order_symbols.assert_called_once_with()
+        assert broker.open_order_symbols.call_count == 2
+        assert all(call.args == () for call in broker.open_order_symbols.call_args_list)
         risk.state.clear_symbol.assert_not_called()
-        assert trade_log.log.call_args.args[0].action == "TRIM"
+        risk.state.record_pending_order.assert_called_once_with(
+            order_id="trim-order-id",
+            symbol="AAPL",
+            side="sell",
+            qty=100.0,
+            full_position=False,
+        )
+        assert trade_log.log.call_args.args[0].action == "SUBMIT"
+        assert trade_log.log.call_args.args[0].order_id == "trim-order-id"
 
         pending_symbols.add("AAPL")
         broker.submit_market_order.reset_mock()
@@ -335,7 +344,7 @@ def test_live_trade_cycle_routes_cap_trim_as_partial_sell_order():
         broker.submit_market_order.assert_not_called()
         broker.close_position.assert_not_called()
         assert trade_log.log.call_args.args[0].action == "SKIP"
-        assert "sell already pending" in trade_log.log.call_args.args[0].reason
+        assert "broker order already pending" in trade_log.log.call_args.args[0].reason
 
 
 def test_size_orders_skips_non_finite_quote():

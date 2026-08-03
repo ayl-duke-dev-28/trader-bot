@@ -20,6 +20,7 @@ from src.data.market_data import get_history, get_history_many
 from src.data.universe import load_universe
 from src.politicians.tracker import politician_signals
 from src.risk.manager import RiskManager, TradeIntent
+from src.risk.state import RiskState
 from src.risk.validation import is_valid_price
 from src.signals.classical import classical_signal
 from src.signals.hedge_fund import hedge_fund_decision
@@ -102,6 +103,71 @@ def _consolidate_intents(intents: list[TradeIntent]) -> list[TradeIntent]:
             ),
         )
     return [merged[key] for key in order]
+
+
+_FILLED_ORDER_STATUSES = {"filled"}
+_TERMINAL_ORDER_STATUSES = {
+    "canceled",
+    "done_for_day",
+    "expired",
+    "rejected",
+    "replaced",
+    "stopped",
+    "suspended",
+}
+
+
+def _reconcile_pending_orders(
+    broker: AlpacaBroker,
+    state: RiskState,
+    *,
+    trade_log: TradeLogger,
+    mode: str,
+) -> set[str]:
+    """Resolve terminal broker orders and return symbols that remain blocked."""
+    blocked: set[str] = set()
+    for pending in state.pending_orders():
+        current = broker.order_status(pending.order_id)
+        if current is None:
+            blocked.add(pending.symbol)
+            continue
+
+        status = current.status.lower()
+        fully_filled = status in _FILLED_ORDER_STATUSES or (
+            current.qty > 0 and current.filled_qty >= current.qty
+        )
+        if fully_filled:
+            state.resolve_pending_order(pending.order_id)
+            if pending.side == "sell" and pending.full_position:
+                if pending.cooldown_days > 0:
+                    state.record_stop(pending.symbol, pending.cooldown_days)
+                else:
+                    state.clear_symbol(pending.symbol)
+            trade_log.log(TradeLogEntry(
+                action="FILLED",
+                symbol=pending.symbol,
+                mode=mode,
+                qty=current.filled_qty,
+                reason=f"broker order reconciled: {status}",
+                order_id=pending.order_id,
+            ))
+            continue
+
+        if status in _TERMINAL_ORDER_STATUSES:
+            state.resolve_pending_order(pending.order_id)
+            trade_log.log(TradeLogEntry(
+                action=status.upper(),
+                symbol=pending.symbol,
+                mode=mode,
+                qty=current.filled_qty,
+                reason=f"broker order reconciled: {status}",
+                order_id=pending.order_id,
+            ))
+            continue
+
+        state.update_pending_order_status(pending.order_id, status)
+        blocked.add(pending.symbol)
+    return blocked
 
 
 def _setup_logging(cfg: Config) -> None:
@@ -280,14 +346,34 @@ def trade_once(cfg: Config) -> None:
         log.info("market closed; skipping")
         return
 
+    blocked_order_symbols = _reconcile_pending_orders(
+        broker,
+        risk.state,
+        trade_log=trade_log,
+        mode=mode,
+    )
+    if not dry:
+        blocked_order_symbols.update(broker.open_order_symbols())
+
     symbols = load_universe(cfg)
     log.info("evaluating %d symbols", len(symbols))
     held_symbols = [p.symbol for p in broker.positions()]
     history = _history_for_all(cfg, symbols, held_symbols)
     macro_cycles = _load_live_macro_cycles(cfg)
 
-    risk.apply_stop_losses(history=history, dry_run=dry, mode=mode)
-    if risk.apply_portfolio_drawdown_guard(dry_run=dry, mode=mode):
+    stop_orders = risk.apply_stop_losses(
+        history=history,
+        dry_run=dry,
+        mode=mode,
+        blocked_symbols=blocked_order_symbols,
+    )
+    if isinstance(stop_orders, set):
+        blocked_order_symbols.update(stop_orders)
+    if risk.apply_portfolio_drawdown_guard(
+        dry_run=dry,
+        mode=mode,
+        blocked_symbols=blocked_order_symbols,
+    ):
         return
 
     scores = compute_signals(cfg, symbols, history=history)
@@ -307,26 +393,22 @@ def trade_once(cfg: Config) -> None:
         return
 
     allow_fractional = bool(cfg.get("execution", "fractional_shares", default=True))
-    open_buy_symbols = set() if dry else broker.open_order_symbols(side="buy")
-    open_sell_symbols = set() if dry else broker.open_order_symbols(side="sell")
+    if not dry:
+        blocked_order_symbols.update(broker.open_order_symbols())
     execution_positions = {p.symbol: p for p in broker.positions()}
 
     for intent in intents:
         score = scores.get(intent.symbol)
-        if intent.side == "buy" and intent.symbol in open_buy_symbols:
-            log.info("[SKIP] BUY %s: open buy order already pending", intent.symbol)
+        if intent.symbol in blocked_order_symbols:
+            log.info(
+                "[SKIP] %s %s: broker order already pending",
+                intent.side.upper(),
+                intent.symbol,
+            )
             trade_log.log(TradeLogEntry(
                 action="SKIP", symbol=intent.symbol, mode=mode,
                 target_dollars=intent.target_dollars, score=score,
-                reason=f"buy already pending; {intent.reason}",
-            ))
-            continue
-        if intent.side == "sell" and intent.symbol in open_sell_symbols:
-            log.info("[SKIP] SELL %s: open sell order already pending", intent.symbol)
-            trade_log.log(TradeLogEntry(
-                action="SKIP", symbol=intent.symbol, mode=mode,
-                target_dollars=intent.target_dollars, score=score,
-                reason=f"sell already pending; {intent.reason}",
+                reason=f"broker order already pending; {intent.reason}",
             ))
             continue
         qty, price = _execution_qty_price(intent, prices, execution_positions, allow_fractional)
@@ -350,24 +432,37 @@ def trade_once(cfg: Config) -> None:
         log.info(msg)
         if intent.side == "sell":
             if intent.sell_entire_position:
-                submitted = broker.close_position(intent.symbol)
+                order_id = broker.close_position(intent.symbol)
             else:
-                submitted = bool(broker.submit_market_order(intent.symbol, qty, "sell"))
-            if submitted and intent.sell_entire_position:
-                risk.state.clear_symbol(intent.symbol)
+                order_id = broker.submit_market_order(intent.symbol, qty, "sell")
+            if order_id:
+                risk.state.record_pending_order(
+                    order_id=order_id,
+                    symbol=intent.symbol,
+                    side="sell",
+                    qty=qty,
+                    full_position=intent.sell_entire_position,
+                )
+                blocked_order_symbols.add(intent.symbol)
             trade_log.log(TradeLogEntry(
-                action=(
-                    "SELL" if submitted and intent.sell_entire_position
-                    else "TRIM" if submitted
-                    else "FAIL"
-                ),
+                action="SUBMIT" if order_id else "FAIL",
                 symbol=intent.symbol, mode=mode, qty=qty, price=price,
                 target_dollars=intent.target_dollars, score=score, reason=intent.reason,
+                order_id=order_id or "",
             ))
         else:
             order_id = broker.submit_market_order(intent.symbol, qty, "buy")
+            if order_id:
+                risk.state.record_pending_order(
+                    order_id=order_id,
+                    symbol=intent.symbol,
+                    side="buy",
+                    qty=qty,
+                    full_position=False,
+                )
+                blocked_order_symbols.add(intent.symbol)
             trade_log.log(TradeLogEntry(
-                action="BUY" if order_id else "FAIL",
+                action="SUBMIT" if order_id else "FAIL",
                 symbol=intent.symbol, mode=mode, qty=qty, price=price,
                 target_dollars=intent.target_dollars, score=score, reason=intent.reason,
                 order_id=order_id or "",

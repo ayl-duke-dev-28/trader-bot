@@ -35,7 +35,7 @@ COLUMNS: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class TradeLogEntry:
-    action: str          # BUY | SELL | STOP | SKIP | DRY | FAIL
+    action: str          # SUBMIT | FILLED | terminal broker status | SKIP | DRY | FAIL
     symbol: str
     mode: str            # paper | live | dry
     qty: float = 0.0

@@ -59,6 +59,20 @@ class Account:
     portfolio_value: float
 
 
+@dataclass(frozen=True)
+class BrokerOrderStatus:
+    order_id: str
+    symbol: str
+    side: str
+    status: str
+    qty: float
+    filled_qty: float
+
+
+def _enum_text(value: object) -> str:
+    return str(getattr(value, "value", value)).lower()
+
+
 class AlpacaBroker:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -166,11 +180,31 @@ class AlpacaBroker:
             log.error("order failed %s %s qty=%s: %s", side, symbol, qty, e)
             return None
 
-    def close_position(self, symbol: str) -> bool:
+    def close_position(self, symbol: str) -> str | None:
         try:
-            self.client.close_position(symbol)
-            log.info("closed position %s", symbol)
-            return True
+            order = self.client.close_position(symbol)
+            order_id = str(order.id)
+            log.info("submitted full-position close %s id=%s", symbol, order_id)
+            return order_id
         except Exception as e:
             log.error("close_position failed %s: %s", symbol, e)
-            return False
+            return None
+
+    def order_status(self, order_id: str) -> BrokerOrderStatus | None:
+        """Fetch the broker's current state for one submitted order."""
+        try:
+            order = _retry_request(
+                f"Alpaca order status {order_id}",
+                lambda: self.client.get_order_by_id(order_id),
+            )
+        except Exception as e:
+            log.warning("order status unavailable %s: %s", order_id, e)
+            return None
+        return BrokerOrderStatus(
+            order_id=str(order.id),
+            symbol=str(order.symbol).upper(),
+            side=_enum_text(order.side),
+            status=_enum_text(order.status),
+            qty=float(order.qty or 0.0),
+            filled_qty=float(order.filled_qty or 0.0),
+        )

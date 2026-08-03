@@ -1,15 +1,17 @@
 """Persistent risk state.
 
-Three things live here across process restarts:
+Four things live here across process restarts:
   * day-start equity for the kill switch
   * per-symbol cooldowns after a stop-out
   * trailing-stop high-water mark per open position
+  * submitted broker orders awaiting a terminal status
 """
 from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime, timedelta
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +23,20 @@ _EMPTY: dict[str, Any] = {
     "highwater": {},
     "day_equity": {},
     "portfolio": {},
+    "pending_orders": {},
 }
+
+
+@dataclass(frozen=True)
+class PendingOrder:
+    order_id: str
+    symbol: str
+    side: str
+    qty: float
+    full_position: bool
+    cooldown_days: int
+    status: str
+    submitted_at: str
 
 
 class RiskState:
@@ -108,6 +123,63 @@ class RiskState:
             self._data["highwater"].pop(symbol, None)
             changed = True
         if changed:
+            self._save()
+
+    # --- broker order ledger --------------------------------------------
+
+    def record_pending_order(
+        self,
+        *,
+        order_id: str,
+        symbol: str,
+        side: str,
+        qty: float,
+        full_position: bool,
+        cooldown_days: int = 0,
+    ) -> None:
+        self._data["pending_orders"][str(order_id)] = {
+            "symbol": str(symbol).upper(),
+            "side": str(side).lower(),
+            "qty": float(qty),
+            "full_position": bool(full_position),
+            "cooldown_days": max(0, int(cooldown_days)),
+            "status": "submitted",
+            "submitted_at": datetime.now(UTC).isoformat(),
+        }
+        self._save()
+
+    def pending_orders(self) -> list[PendingOrder]:
+        orders: list[PendingOrder] = []
+        for order_id, raw in self._data["pending_orders"].items():
+            try:
+                orders.append(
+                    PendingOrder(
+                        order_id=str(order_id),
+                        symbol=str(raw["symbol"]).upper(),
+                        side=str(raw["side"]).lower(),
+                        qty=float(raw["qty"]),
+                        full_position=bool(raw["full_position"]),
+                        cooldown_days=max(0, int(raw.get("cooldown_days", 0))),
+                        status=str(raw.get("status", "submitted")).lower(),
+                        submitted_at=str(raw.get("submitted_at", "")),
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                log.warning("ignoring malformed pending order state %s", order_id)
+        return orders
+
+    def update_pending_order_status(self, order_id: str, status: str) -> None:
+        pending = self._data["pending_orders"].get(str(order_id))
+        if pending is None:
+            return
+        normalized = str(status).lower()
+        if pending.get("status") == normalized:
+            return
+        pending["status"] = normalized
+        self._save()
+
+    def resolve_pending_order(self, order_id: str) -> None:
+        if self._data["pending_orders"].pop(str(order_id), None) is not None:
             self._save()
 
     # --- portfolio drawdown guard ----------------------------------------

@@ -89,6 +89,7 @@ class RiskManager:
         self,
         dry_run: bool = False,
         mode: str = "paper",
+        blocked_symbols: set[str] | None = None,
     ) -> bool:
         """Liquidate and block new buys after portfolio drawdown exceeds config."""
         guard_cfg = self._r("portfolio_drawdown_guard", default={}) or {}
@@ -114,7 +115,14 @@ class RiskManager:
             highwater,
             acct.equity,
         )
+        blocked_symbols = blocked_symbols or set()
         for p in self.broker.positions():
+            if p.symbol in blocked_symbols:
+                log.warning(
+                    "portfolio guard close deferred for %s: order already pending",
+                    p.symbol,
+                )
+                continue
             self._close(
                 p,
                 dry_run,
@@ -133,8 +141,11 @@ class RiskManager:
         history: dict[str, pd.DataFrame] | None = None,
         dry_run: bool = False,
         mode: str = "paper",
-    ) -> None:
+        blocked_symbols: set[str] | None = None,
+    ) -> set[str]:
         history = history or {}
+        blocked_symbols = blocked_symbols or set()
+        submitted_symbols: set[str] = set()
         stop_min = float(self._r("stop_min_pct", default=0.04))
         stop_max = float(self._r("stop_max_pct", default=0.12))
         atr_mult = float(self._r("stop_atr_mult", default=2.5))
@@ -144,6 +155,9 @@ class RiskManager:
         gap_skip = float(self._r("gap_skip_pct", default=0.05))
 
         for p in self.broker.positions():
+            if p.symbol in blocked_symbols:
+                log.info("stop evaluation deferred for %s: order already pending", p.symbol)
+                continue
             hist = history.get(p.symbol)
             stop_pct = self._compute_stop_pct(hist, atr_mult, stop_min, stop_max)
             highwater = self.state.update_highwater(p.symbol, p.unrealized_plpc)
@@ -152,10 +166,12 @@ class RiskManager:
             if highwater >= trailing_activate:
                 trailing_floor = highwater - trailing_giveback
                 if p.unrealized_plpc <= trailing_floor:
-                    self._close(
+                    order_id = self._close(
                         p, dry_run, cooldown_days, mode=mode,
                         reason=f"trailing lock hw={highwater:.2%} now={p.unrealized_plpc:.2%}",
                     )
+                    if order_id:
+                        submitted_symbols.add(p.symbol)
                     continue
 
             # Gap protection: if the name gapped hard today, skip the stop
@@ -168,10 +184,13 @@ class RiskManager:
                     continue
 
             if p.unrealized_plpc <= -stop_pct:
-                self._close(
+                order_id = self._close(
                     p, dry_run, cooldown_days, mode=mode,
                     reason=f"stop pl={p.unrealized_plpc:.2%} vs -{stop_pct:.2%}",
                 )
+                if order_id:
+                    submitted_symbols.add(p.symbol)
+        return submitted_symbols
 
     @staticmethod
     def _compute_stop_pct(
@@ -192,7 +211,7 @@ class RiskManager:
         cooldown_days: int,
         reason: str,
         mode: str = "paper",
-    ) -> None:
+    ) -> str | None:
         log.warning("closing %s: %s", p.symbol, reason)
         if dry_run:
             log.info("[DRY] would close %s", p.symbol)
@@ -201,16 +220,25 @@ class RiskManager:
                     action="DRY", symbol=p.symbol, mode=mode, qty=p.qty,
                     target_dollars=p.market_value, reason=f"stop-loss close; {reason}",
                 ))
-            return
-        closed = self.broker.close_position(p.symbol)
-        if closed:
-            self.state.record_stop(p.symbol, cooldown_days)
+            return None
+        order_id = self.broker.close_position(p.symbol)
+        if order_id:
+            self.state.record_pending_order(
+                order_id=order_id,
+                symbol=p.symbol,
+                side="sell",
+                qty=p.qty,
+                full_position=True,
+                cooldown_days=cooldown_days,
+            )
         if self.trade_log is not None:
             self.trade_log.log(TradeLogEntry(
-                action="STOP" if closed else "FAIL",
+                action="SUBMIT" if order_id else "FAIL",
                 symbol=p.symbol, mode=mode, qty=p.qty,
                 target_dollars=p.market_value, reason=reason,
+                order_id=order_id or "",
             ))
+        return order_id
 
     # --- sizing -----------------------------------------------------------
 
