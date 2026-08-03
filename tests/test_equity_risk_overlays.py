@@ -188,7 +188,15 @@ def test_live_risk_manager_freezes_buys_when_qqq_benchmark_is_missing():
                     "risk_off_max_gross_exposure": 0.20,
                 },
                 ("risk", "macro_cycle"): {"enabled": False},
-                ("risk", "benchmark_core"): {"enabled": False},
+                ("risk", "benchmark_core"): {
+                    "enabled": True,
+                    "symbol": "QQQ",
+                    "risk_on_target_pct": 0.50,
+                    "neutral_target_pct": 0.50,
+                    "contraction_target_pct": 0.0,
+                    "risk_off_target_pct": 0.0,
+                    "min_trade_dollars": 100,
+                },
                 ("risk", "relative_strength"): {"enabled": False},
                 ("risk", "sector_risk"): {"enabled": False},
                 ("risk", "value_at_risk"): {"enabled": False},
@@ -198,11 +206,11 @@ def test_live_risk_manager_freezes_buys_when_qqq_benchmark_is_missing():
     class DummyBroker:
         @staticmethod
         def account():
-            return Account(100_000.0, 100_000.0, 100_000.0, 100_000.0)
+            return Account(100_000.0, 50_000.0, 50_000.0, 100_000.0)
 
         @staticmethod
         def positions():
-            return []
+            return [Position("QQQ", 500.0, 80.0, 50_000.0, 0.25)]
 
     class DummyState:
         @staticmethod
@@ -222,7 +230,7 @@ def test_live_risk_manager_freezes_buys_when_qqq_benchmark_is_missing():
 
     intents = risk.size_orders(
         scores={"AAPL": 1.0},
-        prices={"AAPL": 120.0},
+        prices={"QQQ": 100.0, "AAPL": 120.0},
         history={"AAPL": aapl_history},
     )
 
@@ -287,6 +295,30 @@ def test_live_risk_manager_still_allows_exits_when_qqq_benchmark_is_missing():
     assert len(intents) == 1
     assert intents[0].symbol == "AAPL"
     assert intents[0].side == "sell"
+
+
+def test_market_regime_state_rejects_short_or_lagging_qqq_history():
+    class DummyConfig:
+        @staticmethod
+        def get(*keys, default=None):
+            if keys == ("risk", "market_regime"):
+                return {
+                    "enabled": True,
+                    "benchmark_symbol": "QQQ",
+                    "sma_window": 20,
+                }
+            return default
+
+    risk = RiskManager(DummyConfig(), broker=object(), state=object())
+    short_qqq = _close_history(np.linspace(100.0, 110.0, 19).tolist())
+    complete_qqq = _close_history(np.linspace(100.0, 120.0, 20).tolist())
+    later_aapl = _close_history(np.linspace(100.0, 121.0, 21).tolist())
+
+    assert risk._market_regime_state({"QQQ": short_qqq}) is None
+    assert risk._market_regime_state(
+        {"QQQ": complete_qqq, "AAPL": later_aapl}
+    ) is None
+    assert risk._market_regime_state({"QQQ": complete_qqq}) is True
 
 
 def test_live_macro_loader_builds_cycles_from_fresh_point_in_time_cache(tmp_path):

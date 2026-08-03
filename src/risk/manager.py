@@ -227,7 +227,8 @@ class RiskManager:
         equity = acct.equity
         max_pos_pct = float(self._r("max_position_pct", default=0.05))
         normal_max_gross_pct = float(self._r("max_gross_exposure", default=0.80))
-        market_risk_on = self._market_regime_is_risk_on(history)
+        market_regime_state = self._market_regime_state(history)
+        market_data_available = market_regime_state is not None
         max_gross_pct = self._regime_adjusted_max_gross_pct(history, normal_max_gross_pct)
         as_of_date = as_of or _latest_history_date(history)
         max_gross_pct = self._macro_adjusted_max_gross_pct(
@@ -253,17 +254,28 @@ class RiskManager:
 
         intents: list[TradeIntent] = []
         core_symbol = self._benchmark_core_symbol()
-        core_target_pct = self._benchmark_core_target_pct(
+        configured_core_target_pct = self._benchmark_core_target_pct(
             max_gross_pct,
             normal_max_gross_pct,
-            market_risk_on=market_risk_on,
+            market_risk_on=(
+                market_regime_state
+                if market_data_available
+                else True
+            ),
             macro_regime=macro_regime,
         )
+        core_target_pct = configured_core_target_pct if market_data_available else 0.0
 
         # 1) Sells: hysteresis — only exit when score has drifted to zero.
         for sym, p in held.items():
             score = scores.get(sym, 0.0)
             if score <= exit_thr:
+                if sym == core_symbol and not market_data_available:
+                    log.warning(
+                        "[HOLD] benchmark core %s: market regime data unavailable",
+                        sym,
+                    )
+                    continue
                 if sym == core_symbol and core_target_pct > 0:
                     log.info(
                         "[HOLD] benchmark core %s despite score=%+.2f; target=%d%%",
@@ -279,13 +291,14 @@ class RiskManager:
                     )
                 )
 
-        self._apply_benchmark_core_sells(
-            intents=intents,
-            held=held,
-            max_gross_pct=max_gross_pct,
-            normal_max_gross_pct=normal_max_gross_pct,
-            target_pct=core_target_pct,
-        )
+        if market_data_available or macro_regime == "contraction":
+            self._apply_benchmark_core_sells(
+                intents=intents,
+                held=held,
+                max_gross_pct=max_gross_pct,
+                normal_max_gross_pct=normal_max_gross_pct,
+                target_pct=configured_core_target_pct,
+            )
         self._apply_gross_cap_sells(
             intents=intents,
             held=held,
@@ -293,7 +306,7 @@ class RiskManager:
             equity=equity,
             max_gross_pct=max_gross_pct,
             core_symbol=core_symbol,
-            core_target_pct=core_target_pct,
+            core_target_pct=configured_core_target_pct,
         )
 
         if self.state.portfolio_guard_tripped():
@@ -302,6 +315,12 @@ class RiskManager:
 
         if self.kill_switch_tripped():
             log.warning("kill switch tripped; no new buys this cycle")
+            return intents
+
+        if not market_data_available:
+            log.error(
+                "market regime benchmark unavailable; blocking all buys this cycle"
+            )
             return intents
 
         symbols_to_sell = {i.symbol for i in intents if i.side == "sell"}
@@ -654,11 +673,11 @@ class RiskManager:
         )
         return adjusted
 
-    def _market_regime_is_risk_on(
+    def _market_regime_state(
         self,
         history: dict[str, pd.DataFrame],
-    ) -> bool:
-        """Return the QQQ trend state independently of other exposure caps."""
+    ) -> bool | None:
+        """Return risk-on/off, or ``None`` when benchmark data is unavailable."""
         regime_cfg = self._r("market_regime", default={}) or {}
         if not bool(regime_cfg.get("enabled", False)):
             return True
@@ -667,12 +686,20 @@ class RiskManager:
         window = int(regime_cfg.get("sma_window", 200))
         hist = history.get(benchmark)
         if hist is None or hist.empty or "close" not in hist.columns:
-            return True
+            return None
         close = hist["close"].dropna()
         if len(close) < window:
-            return True
+            return None
+        latest_history_date = _latest_history_date(history)
+        benchmark_date = pd.Timestamp(close.index[-1])
+        if benchmark_date.tzinfo is not None:
+            benchmark_date = benchmark_date.tz_localize(None)
+        if benchmark_date < latest_history_date:
+            return None
         sma = close.rolling(window).mean().iloc[-1]
-        return bool(sma != sma or close.iloc[-1] >= sma)
+        if sma != sma:
+            return None
+        return bool(close.iloc[-1] >= sma)
 
     def _macro_regime_at(
         self,

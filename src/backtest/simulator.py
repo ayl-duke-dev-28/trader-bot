@@ -76,11 +76,11 @@ def _count_by_sector(symbols: list[str]) -> dict[str, int]:
     return counts
 
 
-def _market_regime_is_risk_on_at(
+def _market_regime_state_at(
     cfg: Config,
     history: dict[str, pd.DataFrame],
     date: pd.Timestamp,
-) -> bool:
+) -> bool | None:
     regime_cfg = _cfg_r(cfg, "market_regime", default={}) or {}
     if not bool(regime_cfg.get("enabled", False)):
         return True
@@ -89,13 +89,23 @@ def _market_regime_is_risk_on_at(
     window = int(regime_cfg.get("sma_window", 200))
     hist = history.get(benchmark)
     if hist is None or hist.empty or "close" not in hist.columns:
-        return True
+        return None
 
     close = hist.loc[:date]["close"].dropna()
     if len(close) < window:
-        return True
+        return None
+    benchmark_date = pd.Timestamp(close.index[-1])
+    comparison_date = pd.Timestamp(date)
+    if benchmark_date.tzinfo is not None:
+        benchmark_date = benchmark_date.tz_localize(None)
+    if comparison_date.tzinfo is not None:
+        comparison_date = comparison_date.tz_localize(None)
+    if benchmark_date < comparison_date:
+        return None
     sma = close.rolling(window).mean().iloc[-1]
-    return bool(sma != sma or close.iloc[-1] >= sma)
+    if sma != sma:
+        return None
+    return bool(close.iloc[-1] >= sma)
 
 
 def _regime_adjusted_max_gross_pct(
@@ -104,7 +114,7 @@ def _regime_adjusted_max_gross_pct(
     date: pd.Timestamp,
     normal_max_gross_pct: float,
 ) -> float:
-    if _market_regime_is_risk_on_at(cfg, history, date):
+    if _market_regime_state_at(cfg, history, date) is not False:
         return normal_max_gross_pct
     regime_cfg = _cfg_r(cfg, "market_regime", default={}) or {}
     risk_off_max = float(regime_cfg.get("risk_off_max_gross_exposure", 0.0))
@@ -578,7 +588,8 @@ def simulate_current_bot(
             }
             scores = _score_snapshot(cfg, prior_history, active_bundle)
 
-        market_risk_on = _market_regime_is_risk_on_at(cfg, history, date)
+        market_regime_state = _market_regime_state_at(cfg, history, date)
+        market_data_available = market_regime_state is not None
         adjusted_max_gross_pct = _regime_adjusted_max_gross_pct(cfg, history, date, max_gross_pct)
         macro_regime = None
         if macro_enabled:
@@ -591,14 +602,22 @@ def simulate_current_bot(
                 config=macro_cfg,
             )
         core_symbol = _benchmark_core_symbol(cfg)
-        core_target_pct = _benchmark_core_target_pct(
+        configured_core_target_pct = _benchmark_core_target_pct(
             cfg,
             adjusted_max_gross_pct,
             max_gross_pct,
-            market_risk_on=market_risk_on,
+            market_risk_on=(
+                market_regime_state
+                if market_data_available
+                else True
+            ),
             macro_regime=macro_regime,
         )
-        if core_target_pct <= 0 and core_symbol in positions:
+        core_target_pct = configured_core_target_pct if market_data_available else 0.0
+        core_exit_required = (
+            market_data_available or macro_regime == "contraction"
+        ) and configured_core_target_pct <= 0
+        if core_exit_required and core_symbol in positions:
             price = price_on(core_symbol, date)
             if price is not None:
                 pos = positions.pop(core_symbol)
@@ -610,6 +629,8 @@ def simulate_current_bot(
         for sym, pos in list(positions.items()):
             score = float(scores.get(sym, 0.0))
             if score <= exit_thr:
+                if sym == core_symbol and not market_data_available:
+                    continue
                 if sym == core_symbol and core_target_pct > 0:
                     continue
                 price = price_on(sym, date)
@@ -631,7 +652,7 @@ def simulate_current_bot(
         excess = sum(projected_values.values()) - cap_dollars
         reductions: list[tuple[str, float]] = []
         core_value = projected_values.get(core_symbol, 0.0)
-        core_floor = min(cap_dollars, current_equity * core_target_pct)
+        core_floor = min(cap_dollars, current_equity * configured_core_target_pct)
         core_excess = max(0.0, core_value - core_floor)
         if core_excess > 0:
             reductions.append((core_symbol, core_excess))
@@ -711,7 +732,8 @@ def simulate_current_bot(
             or (core_cooldown is not None and date < core_cooldown)
         )
         if (
-            core_target_pct > 0
+            market_data_available
+            and core_target_pct > 0
             and core_price is not None
             and not core_blackout
             and not core_blocked
@@ -759,6 +781,8 @@ def simulate_current_bot(
             sector_risk_cfg,
         )
         for sym, score in candidates:
+            if not market_data_available:
+                break
             if open_slots <= 0 or remaining_gross <= 100.0:
                 break
             if cooldown_until.get(sym) is not None and date < cooldown_until[sym]:
@@ -826,6 +850,7 @@ def simulate_current_bot(
             "cash": round(cash, 2),
             "positions": len(positions),
             "max_gross_exposure": round(adjusted_max_gross_pct, 4),
+            "market_regime_data_available": bool(market_data_available),
         }
         if var_enabled:
             estimate = estimate_historical_risk(
@@ -910,6 +935,9 @@ def simulate_current_bot(
         "macro_cycle_enabled": bool(macro_enabled),
         "var_enabled": bool(var_enabled),
         "var_blocked_buys": int(var_blocked_buys),
+        "market_regime_unavailable_days": int(
+            (~equity_curve["market_regime_data_available"].fillna(False).astype(bool)).sum()
+        ),
     }
     if var_enabled:
         summary.update(
