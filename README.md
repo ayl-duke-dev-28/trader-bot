@@ -44,10 +44,12 @@ The configured signal path is:
 - Execution: whole-share buys; fractional shares disabled
 - Position sizing: max `5%` per position, max `80%` gross exposure, max `20`
   positions
-- Signal thresholds: enter at `0.55` or higher; exit when the score reaches
-  `0.00` or lower
+- Signal thresholds: enter at `0.55` or higher; non-core holdings exit when
+  the score reaches `0.00` or lower
 - Market regime filter: `QQQ` above/below its `200`-day SMA
-- Benchmark core: `QQQ`, `50%` target in risk-on regimes
+- Benchmark core: `QQQ`, `50%` target in risk-on regimes; while that target is
+  positive, a negative QQQ ensemble score does not liquidate and repurchase the
+  core sleeve
 - Relative strength: enabled versus `QQQ` over `63` trading days
 - Macro cycle: enabled; neutral and contraction regimes cap gross exposure at
   `60%` and `30%`, after the existing QQQ trend cap
@@ -185,6 +187,20 @@ next scheduled slot is used.
 The economic-cycle overlay is not enabled by default for historical runs even
 though it is enabled for paper/live trading. Supply `--macro-data` (or enable
 `backtest.macro_cycle`) so the backtest uses point-in-time macro observations.
+
+### Benchmark-core precedence
+
+The configured QQQ sleeve is a regime allocation, not an ordinary stock
+position. While its adjusted core target is positive, the generic score-exit
+rule is ignored for QQQ. This prevents an hourly loop in which a negative
+ensemble score sells QQQ and the benchmark-core rule buys it back during the
+next cycle. The runtime log records this decision as `[HOLD] benchmark core
+QQQ ...`.
+
+QQQ can still be closed by its stop or trailing lock, the portfolio drawdown
+guard, or a market/macro regime that sets `risk_off_target_pct` to zero. A
+stop-driven close retains the normal cooldown before the core can be restored.
+The historical simulator uses the same precedence.
 
 When ML is enabled, the backtester does **not** use a single model trained on the
 full dataset. It trains ML only on rolling prior windows and tests only the
