@@ -62,12 +62,15 @@ risk:
     sma_window: 200
     risk_off_max_gross_exposure: 0.20
 
-  # benchmark-aware layer: keep a core QQQ sleeve in risk-on regimes and only
-  # add individual names that are outperforming that benchmark.
+  # benchmark-aware layer: QQQ trend and macro regime are separate controls.
+  # Neutral macro conditions reduce total gross exposure but retain the core;
+  # a QQQ downtrend or macro contraction exits it.
   benchmark_core:
     enabled: true
     symbol: QQQ
     risk_on_target_pct: 0.50
+    neutral_target_pct: 0.50
+    contraction_target_pct: 0.0
     risk_off_target_pct: 0.0
     min_trade_dollars: 500
 

@@ -76,29 +76,38 @@ def _count_by_sector(symbols: list[str]) -> dict[str, int]:
     return counts
 
 
+def _market_regime_is_risk_on_at(
+    cfg: Config,
+    history: dict[str, pd.DataFrame],
+    date: pd.Timestamp,
+) -> bool:
+    regime_cfg = _cfg_r(cfg, "market_regime", default={}) or {}
+    if not bool(regime_cfg.get("enabled", False)):
+        return True
+
+    benchmark = str(regime_cfg.get("benchmark_symbol", "QQQ")).upper()
+    window = int(regime_cfg.get("sma_window", 200))
+    hist = history.get(benchmark)
+    if hist is None or hist.empty or "close" not in hist.columns:
+        return True
+
+    close = hist.loc[:date]["close"].dropna()
+    if len(close) < window:
+        return True
+    sma = close.rolling(window).mean().iloc[-1]
+    return bool(sma != sma or close.iloc[-1] >= sma)
+
+
 def _regime_adjusted_max_gross_pct(
     cfg: Config,
     history: dict[str, pd.DataFrame],
     date: pd.Timestamp,
     normal_max_gross_pct: float,
 ) -> float:
+    if _market_regime_is_risk_on_at(cfg, history, date):
+        return normal_max_gross_pct
     regime_cfg = _cfg_r(cfg, "market_regime", default={}) or {}
-    if not bool(regime_cfg.get("enabled", False)):
-        return normal_max_gross_pct
-
-    benchmark = str(regime_cfg.get("benchmark_symbol", "QQQ")).upper()
-    window = int(regime_cfg.get("sma_window", 200))
     risk_off_max = float(regime_cfg.get("risk_off_max_gross_exposure", 0.0))
-    hist = history.get(benchmark)
-    if hist is None or hist.empty or "close" not in hist.columns:
-        return normal_max_gross_pct
-
-    close = hist.loc[:date]["close"].dropna()
-    if len(close) < window:
-        return normal_max_gross_pct
-    sma = close.rolling(window).mean().iloc[-1]
-    if sma != sma or close.iloc[-1] >= sma:
-        return normal_max_gross_pct
     return min(normal_max_gross_pct, risk_off_max)
 
 
@@ -114,13 +123,30 @@ def _benchmark_core_target_pct(
     cfg: Config,
     max_gross_pct: float,
     normal_max_gross_pct: float,
+    *,
+    market_risk_on: bool | None = None,
+    macro_regime: str | None = None,
 ) -> float:
     core_cfg = _benchmark_core_cfg(cfg)
     if not bool(core_cfg.get("enabled", False)):
         return 0.0
-    risk_on = max_gross_pct >= normal_max_gross_pct - 1e-9
-    key = "risk_on_target_pct" if risk_on else "risk_off_target_pct"
-    return max(0.0, min(max_gross_pct, float(core_cfg.get(key, 0.0))))
+    if market_risk_on is None:
+        market_risk_on = max_gross_pct >= normal_max_gross_pct - 1e-9
+    if not market_risk_on:
+        key = "risk_off_target_pct"
+    elif macro_regime == "contraction":
+        key = "contraction_target_pct"
+    elif macro_regime == "neutral":
+        key = "neutral_target_pct"
+    else:
+        key = "risk_on_target_pct"
+    fallback_key = (
+        "risk_off_target_pct"
+        if key == "contraction_target_pct"
+        else "risk_on_target_pct"
+    )
+    configured_target = core_cfg.get(key, core_cfg.get(fallback_key, 0.0))
+    return max(0.0, min(max_gross_pct, float(configured_target)))
 
 
 def _lookback_return_at(
@@ -552,8 +578,12 @@ def simulate_current_bot(
             }
             scores = _score_snapshot(cfg, prior_history, active_bundle)
 
+        market_risk_on = _market_regime_is_risk_on_at(cfg, history, date)
         adjusted_max_gross_pct = _regime_adjusted_max_gross_pct(cfg, history, date, max_gross_pct)
+        macro_regime = None
         if macro_enabled:
+            cycle = macro_cycle_at(macro_cycles, date)
+            macro_regime = None if cycle is None else str(cycle["regime"])
             adjusted_max_gross_pct = macro_exposure_cap(
                 macro_cycles,
                 date,
@@ -561,7 +591,13 @@ def simulate_current_bot(
                 config=macro_cfg,
             )
         core_symbol = _benchmark_core_symbol(cfg)
-        core_target_pct = _benchmark_core_target_pct(cfg, adjusted_max_gross_pct, max_gross_pct)
+        core_target_pct = _benchmark_core_target_pct(
+            cfg,
+            adjusted_max_gross_pct,
+            max_gross_pct,
+            market_risk_on=market_risk_on,
+            macro_regime=macro_regime,
+        )
         if core_target_pct <= 0 and core_symbol in positions:
             price = price_on(core_symbol, date)
             if price is not None:
@@ -597,7 +633,6 @@ def simulate_current_bot(
         sector_used = _count_by_sector(list(positions))
 
         core_cfg = _benchmark_core_cfg(cfg)
-        core_target_pct = _benchmark_core_target_pct(cfg, adjusted_max_gross_pct, max_gross_pct)
         core_price = price_on(core_symbol, date)
         core_blackout = _near_earnings_at(earnings_calendar, core_symbol, date, earnings_blackout_days)
         core_cooldown = cooldown_until.get(core_symbol)

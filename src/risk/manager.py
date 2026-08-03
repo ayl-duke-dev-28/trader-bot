@@ -22,7 +22,7 @@ import pandas as pd
 
 from src.broker.alpaca_client import AlpacaBroker, Position
 from src.config import Config, ROOT
-from src.data.macro import macro_exposure_cap
+from src.data.macro import macro_cycle_at, macro_exposure_cap
 from src.data.sectors import sector_for
 from src.risk.indicators import gap_pct, latest_atr_pct
 from src.risk.sector import calculate_sector_risk
@@ -226,12 +226,15 @@ class RiskManager:
         equity = acct.equity
         max_pos_pct = float(self._r("max_position_pct", default=0.05))
         normal_max_gross_pct = float(self._r("max_gross_exposure", default=0.80))
+        market_risk_on = self._market_regime_is_risk_on(history)
         max_gross_pct = self._regime_adjusted_max_gross_pct(history, normal_max_gross_pct)
+        as_of_date = as_of or _latest_history_date(history)
         max_gross_pct = self._macro_adjusted_max_gross_pct(
             macro_cycles,
-            as_of=as_of or _latest_history_date(history),
+            as_of=as_of_date,
             current_max_gross_pct=max_gross_pct,
         )
+        macro_regime = self._macro_regime_at(macro_cycles, as_of_date)
         max_positions = int(self._r("max_positions", default=20))
         entry_thr = float(self._r("entry_score_threshold", default=0.35))
         exit_thr = float(self._r("exit_score_threshold", default=0.0))
@@ -252,6 +255,8 @@ class RiskManager:
         core_target_pct = self._benchmark_core_target_pct(
             max_gross_pct,
             normal_max_gross_pct,
+            market_risk_on=market_risk_on,
+            macro_regime=macro_regime,
         )
 
         # 1) Sells: hysteresis — only exit when score has drifted to zero.
@@ -278,6 +283,7 @@ class RiskManager:
             held=held,
             max_gross_pct=max_gross_pct,
             normal_max_gross_pct=normal_max_gross_pct,
+            target_pct=core_target_pct,
         )
 
         if self.state.portfolio_guard_tripped():
@@ -308,6 +314,7 @@ class RiskManager:
                 max_gross_pct=max_gross_pct,
                 normal_max_gross_pct=normal_max_gross_pct,
                 open_slots=open_slots,
+                target_pct=core_target_pct,
             )
         if core_intent is not None:
             intents.append(core_intent)
@@ -406,13 +413,30 @@ class RiskManager:
         self,
         max_gross_pct: float,
         normal_max_gross_pct: float,
+        *,
+        market_risk_on: bool | None = None,
+        macro_regime: str | None = None,
     ) -> float:
         core_cfg = self._benchmark_core_cfg()
         if not bool(core_cfg.get("enabled", False)):
             return 0.0
-        risk_on = max_gross_pct >= normal_max_gross_pct - 1e-9
-        key = "risk_on_target_pct" if risk_on else "risk_off_target_pct"
-        return max(0.0, min(max_gross_pct, float(core_cfg.get(key, 0.0))))
+        if market_risk_on is None:
+            market_risk_on = max_gross_pct >= normal_max_gross_pct - 1e-9
+        if not market_risk_on:
+            key = "risk_off_target_pct"
+        elif macro_regime == "contraction":
+            key = "contraction_target_pct"
+        elif macro_regime == "neutral":
+            key = "neutral_target_pct"
+        else:
+            key = "risk_on_target_pct"
+        fallback_key = (
+            "risk_off_target_pct"
+            if key == "contraction_target_pct"
+            else "risk_on_target_pct"
+        )
+        configured_target = core_cfg.get(key, core_cfg.get(fallback_key, 0.0))
+        return max(0.0, min(max_gross_pct, float(configured_target)))
 
     def _apply_benchmark_core_sells(
         self,
@@ -420,6 +444,7 @@ class RiskManager:
         held: dict[str, Position],
         max_gross_pct: float,
         normal_max_gross_pct: float,
+        target_pct: float | None = None,
     ) -> None:
         core_cfg = self._benchmark_core_cfg()
         if not bool(core_cfg.get("enabled", False)):
@@ -427,7 +452,8 @@ class RiskManager:
         symbol = self._benchmark_core_symbol()
         if symbol not in held:
             return
-        target_pct = self._benchmark_core_target_pct(max_gross_pct, normal_max_gross_pct)
+        if target_pct is None:
+            target_pct = self._benchmark_core_target_pct(max_gross_pct, normal_max_gross_pct)
         if target_pct > 0:
             return
         if any(i.symbol == symbol and i.side == "sell" for i in intents):
@@ -443,13 +469,15 @@ class RiskManager:
         max_gross_pct: float,
         normal_max_gross_pct: float,
         open_slots: int,
+        target_pct: float | None = None,
     ) -> TradeIntent | None:
         core_cfg = self._benchmark_core_cfg()
         if not bool(core_cfg.get("enabled", False)):
             return None
 
         symbol = self._benchmark_core_symbol()
-        target_pct = self._benchmark_core_target_pct(max_gross_pct, normal_max_gross_pct)
+        if target_pct is None:
+            target_pct = self._benchmark_core_target_pct(max_gross_pct, normal_max_gross_pct)
         if target_pct <= 0:
             return None
         if self.state.in_cooldown(symbol):
@@ -532,6 +560,39 @@ class RiskManager:
             benchmark, last, window, sma, normal_max_gross_pct * 100, adjusted * 100,
         )
         return adjusted
+
+    def _market_regime_is_risk_on(
+        self,
+        history: dict[str, pd.DataFrame],
+    ) -> bool:
+        """Return the QQQ trend state independently of other exposure caps."""
+        regime_cfg = self._r("market_regime", default={}) or {}
+        if not bool(regime_cfg.get("enabled", False)):
+            return True
+
+        benchmark = str(regime_cfg.get("benchmark_symbol", "QQQ")).upper()
+        window = int(regime_cfg.get("sma_window", 200))
+        hist = history.get(benchmark)
+        if hist is None or hist.empty or "close" not in hist.columns:
+            return True
+        close = hist["close"].dropna()
+        if len(close) < window:
+            return True
+        sma = close.rolling(window).mean().iloc[-1]
+        return bool(sma != sma or close.iloc[-1] >= sma)
+
+    def _macro_regime_at(
+        self,
+        cycles: pd.DataFrame | None,
+        as_of: pd.Timestamp,
+    ) -> str | None:
+        macro_cfg = self._r("macro_cycle", default={}) or {}
+        if not bool(macro_cfg.get("enabled", False)) or cycles is None or cycles.empty:
+            return None
+        current = macro_cycle_at(cycles, as_of)
+        if current is None:
+            return None
+        return str(current["regime"])
 
     def _macro_adjusted_max_gross_pct(
         self,

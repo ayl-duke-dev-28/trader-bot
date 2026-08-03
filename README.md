@@ -47,9 +47,10 @@ The configured signal path is:
 - Signal thresholds: enter at `0.55` or higher; non-core holdings exit when
   the score reaches `0.00` or lower
 - Market regime filter: `QQQ` above/below its `200`-day SMA
-- Benchmark core: `QQQ`, `50%` target in risk-on regimes; while that target is
-  positive, a negative QQQ ensemble score does not liquidate and repurchase the
-  core sleeve
+- Benchmark core: `QQQ`, `50%` target when its trend is risk-on, including a
+  neutral macro regime; a QQQ downtrend or macro contraction sets the target to
+  zero. While the target is positive, a negative QQQ ensemble score does not
+  liquidate and repurchase the core sleeve
 - Relative strength: enabled versus `QQQ` over `63` trading days
 - Macro cycle: enabled; neutral and contraction regimes cap gross exposure at
   `60%` and `30%`, after the existing QQQ trend cap
@@ -198,7 +199,10 @@ next cycle. The runtime log records this decision as `[HOLD] benchmark core
 QQQ ...`.
 
 QQQ can still be closed by its stop or trailing lock, the portfolio drawdown
-guard, or a market/macro regime that sets `risk_off_target_pct` to zero. A
+guard, a QQQ downtrend (`risk_off_target_pct`), or a macro contraction
+(`contraction_target_pct`). A neutral macro regime retains the configured
+`neutral_target_pct` while its `60%` gross cap limits the rest of the portfolio.
+This keeps allocation targets separate from portfolio exposure caps. A
 stop-driven close retains the normal cooldown before the core can be restored.
 The historical simulator uses the same precedence.
 
@@ -329,8 +333,9 @@ The four monthly inputs are:
 The long-cycle score emphasizes levels over a rolling 120-month context. The
 short-cycle score measures six-month changes. In expansion the existing risk
 cap remains authoritative; neutral and contraction regimes cap gross exposure
-at `60%` and `30%` respectively. The QQQ market-regime cap can reduce exposure
-further.
+at `60%` and `30%` respectively. Neutral retains the 50% QQQ core target, while
+contraction sets it to zero. Independently, a QQQ downtrend sets the core target
+to zero and its market-regime cap can reduce gross exposure further.
 
 The downloader requests FRED's initial-release output and indexes every value by
 its historical availability date. Do not substitute a latest-revision FRED CSV:
