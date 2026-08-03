@@ -1038,6 +1038,76 @@ def test_backtest_trims_existing_positions_when_macro_cap_falls():
     assert (result.trades_log["action"] == "TRIM").any()
 
 
+def test_backtest_freezes_buys_when_qqq_benchmark_is_missing():
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            values = {
+                ("execution", "fractional_shares"): True,
+                ("strategies", "momentum_breakout", "enabled"): False,
+                ("strategies", "hedge_fund", "enabled"): True,
+                ("strategies", "ml", "enabled"): False,
+                ("risk", "max_position_pct"): 0.05,
+                ("risk", "max_gross_exposure"): 0.80,
+                ("risk", "max_positions"): 20,
+                ("risk", "entry_score_threshold"): 0.55,
+                ("risk", "exit_score_threshold"): 0.0,
+                ("risk", "gap_skip_pct"): 0.99,
+                ("risk", "cooldown_days"): 3,
+                ("risk", "trailing_activate_pct"): 10.0,
+                ("risk", "trailing_giveback_pct"): 1.0,
+                ("risk", "earnings_blackout_days"): 0,
+                ("risk", "stop_atr_mult"): 100.0,
+                ("risk", "stop_min_pct"): 0.99,
+                ("risk", "stop_max_pct"): 0.99,
+                ("risk", "sector_caps"): {"mega_cap_tech": 20},
+                ("risk", "market_regime"): {
+                    "enabled": True,
+                    "benchmark_symbol": "QQQ",
+                    "sma_window": 20,
+                    "risk_off_max_gross_exposure": 0.20,
+                },
+                ("risk", "macro_cycle"): {"enabled": False},
+                ("risk", "benchmark_core"): {"enabled": False},
+                ("risk", "relative_strength"): {"enabled": False},
+                ("risk", "sector_risk"): {"enabled": False},
+                ("risk", "value_at_risk"): {"enabled": False},
+                ("risk", "portfolio_drawdown_guard"): {"enabled": False},
+                ("data", "history_days"): 80,
+                ("backtest", "warmup_days"): 0,
+            }
+            return values.get(keys, default)
+
+    idx = pd.date_range("2025-01-01", periods=90, freq="B")
+    close = np.linspace(100.0, 120.0, len(idx))
+    aapl = pd.DataFrame(
+        {
+            "open": close,
+            "high": close * 1.01,
+            "low": close * 0.99,
+            "close": close,
+            "volume": 1_000_000,
+        },
+        index=idx,
+    )
+
+    with patch(
+        "src.backtest.simulator._precompute_hedge_fund_scores",
+        return_value={"AAPL": pd.Series(1.0, index=idx)},
+    ):
+        result = backtest(
+            DummyConfig(),
+            {"AAPL": aapl},
+            start_date=idx[60],
+            end_date=idx[70],
+            start_capital=100_000.0,
+            cost_bps=0.0,
+            walk_forward=False,
+        )
+
+    assert result.summary["buys"] == 0
+    assert result.summary["open_positions"] == 0
+
+
 def test_relative_strength_blocks_lagging_symbol():
     class DummyConfig:
         def get(self, *keys, default=None):

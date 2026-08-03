@@ -9,7 +9,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.broker.alpaca_client import Account
+from src.broker.alpaca_client import Account, Position
 from src.risk.manager import RiskManager
 from src.risk.sector import calculate_sector_risk
 from src.trader import _load_live_macro_cycles
@@ -168,6 +168,125 @@ def test_live_buy_size_is_reduced_in_a_weak_sector():
     assert intents[0].symbol == "AAPL"
     assert intents[0].target_dollars == 2_500.0
     assert "sector_risk=0.50" in intents[0].reason
+
+
+def test_live_risk_manager_freezes_buys_when_qqq_benchmark_is_missing():
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            values = {
+                ("risk", "max_position_pct"): 0.05,
+                ("risk", "max_gross_exposure"): 0.80,
+                ("risk", "max_positions"): 20,
+                ("risk", "entry_score_threshold"): 0.55,
+                ("risk", "exit_score_threshold"): 0.0,
+                ("risk", "gap_skip_pct"): 0.99,
+                ("risk", "sector_caps"): {"mega_cap_tech": 5},
+                ("risk", "market_regime"): {
+                    "enabled": True,
+                    "benchmark_symbol": "QQQ",
+                    "sma_window": 20,
+                    "risk_off_max_gross_exposure": 0.20,
+                },
+                ("risk", "macro_cycle"): {"enabled": False},
+                ("risk", "benchmark_core"): {"enabled": False},
+                ("risk", "relative_strength"): {"enabled": False},
+                ("risk", "sector_risk"): {"enabled": False},
+                ("risk", "value_at_risk"): {"enabled": False},
+            }
+            return values.get(keys, default)
+
+    class DummyBroker:
+        @staticmethod
+        def account():
+            return Account(100_000.0, 100_000.0, 100_000.0, 100_000.0)
+
+        @staticmethod
+        def positions():
+            return []
+
+    class DummyState:
+        @staticmethod
+        def portfolio_guard_tripped():
+            return False
+
+        @staticmethod
+        def day_start_equity(equity):
+            return equity
+
+        @staticmethod
+        def in_cooldown(symbol):
+            return False
+
+    aapl_history = _close_history(np.linspace(100.0, 120.0, 60).tolist())
+    risk = RiskManager(DummyConfig(), DummyBroker(), state=DummyState())
+
+    intents = risk.size_orders(
+        scores={"AAPL": 1.0},
+        prices={"AAPL": 120.0},
+        history={"AAPL": aapl_history},
+    )
+
+    assert intents == []
+
+
+def test_live_risk_manager_still_allows_exits_when_qqq_benchmark_is_missing():
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            values = {
+                ("risk", "max_position_pct"): 0.05,
+                ("risk", "max_gross_exposure"): 0.80,
+                ("risk", "max_positions"): 20,
+                ("risk", "entry_score_threshold"): 0.55,
+                ("risk", "exit_score_threshold"): 0.0,
+                ("risk", "gap_skip_pct"): 0.99,
+                ("risk", "sector_caps"): {"mega_cap_tech": 5},
+                ("risk", "market_regime"): {
+                    "enabled": True,
+                    "benchmark_symbol": "QQQ",
+                    "sma_window": 20,
+                    "risk_off_max_gross_exposure": 0.20,
+                },
+                ("risk", "macro_cycle"): {"enabled": False},
+                ("risk", "benchmark_core"): {"enabled": False},
+                ("risk", "relative_strength"): {"enabled": False},
+                ("risk", "sector_risk"): {"enabled": False},
+                ("risk", "value_at_risk"): {"enabled": False},
+            }
+            return values.get(keys, default)
+
+    class DummyBroker:
+        @staticmethod
+        def account():
+            return Account(100_000.0, 95_000.0, 95_000.0, 100_000.0)
+
+        @staticmethod
+        def positions():
+            return [Position("AAPL", 50.0, 100.0, 5_000.0, -0.10)]
+
+    class DummyState:
+        @staticmethod
+        def portfolio_guard_tripped():
+            return False
+
+        @staticmethod
+        def day_start_equity(equity):
+            return equity
+
+        @staticmethod
+        def in_cooldown(symbol):
+            return False
+
+    risk = RiskManager(DummyConfig(), DummyBroker(), state=DummyState())
+
+    intents = risk.size_orders(
+        scores={"AAPL": -0.50},
+        prices={"AAPL": 100.0},
+        history={"AAPL": _close_history([100.0] * 60)},
+    )
+
+    assert len(intents) == 1
+    assert intents[0].symbol == "AAPL"
+    assert intents[0].side == "sell"
 
 
 def test_live_macro_loader_builds_cycles_from_fresh_point_in_time_cache(tmp_path):
