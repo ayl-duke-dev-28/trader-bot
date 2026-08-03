@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from datetime import datetime, time as dt_time, timedelta
 from pathlib import Path
@@ -96,6 +97,9 @@ def _consolidate_intents(intents: list[TradeIntent]) -> list[TradeIntent]:
             side=prev.side,
             target_dollars=prev.target_dollars + intent.target_dollars,
             reason=f"{prev.reason}; {intent.reason}",
+            sell_entire_position=(
+                prev.sell_entire_position or intent.sell_entire_position
+            ),
         )
     return [merged[key] for key in order]
 
@@ -254,7 +258,14 @@ def _execution_qty_price(
         position = positions.get(intent.symbol)
         if position is not None:
             position_price = position.market_value / position.qty if position.qty > 0 else 0.0
-            return position.qty, price or position_price
+            execution_price = price or position_price
+            if intent.sell_entire_position:
+                return position.qty, execution_price
+            if not is_valid_price(execution_price):
+                return 0.0, 0.0
+            raw_qty = intent.target_dollars / execution_price
+            qty = round(raw_qty, 4) if allow_fractional else float(math.ceil(raw_qty))
+            return min(position.qty, qty), execution_price
     return RiskManager.intent_to_qty(intent, price, allow_fractional=allow_fractional), price
 
 
@@ -297,6 +308,7 @@ def trade_once(cfg: Config) -> None:
 
     allow_fractional = bool(cfg.get("execution", "fractional_shares", default=True))
     open_buy_symbols = set() if dry else broker.open_order_symbols(side="buy")
+    open_sell_symbols = set() if dry else broker.open_order_symbols(side="sell")
     execution_positions = {p.symbol: p for p in broker.positions()}
 
     for intent in intents:
@@ -307,6 +319,14 @@ def trade_once(cfg: Config) -> None:
                 action="SKIP", symbol=intent.symbol, mode=mode,
                 target_dollars=intent.target_dollars, score=score,
                 reason=f"buy already pending; {intent.reason}",
+            ))
+            continue
+        if intent.side == "sell" and intent.symbol in open_sell_symbols:
+            log.info("[SKIP] SELL %s: open sell order already pending", intent.symbol)
+            trade_log.log(TradeLogEntry(
+                action="SKIP", symbol=intent.symbol, mode=mode,
+                target_dollars=intent.target_dollars, score=score,
+                reason=f"sell already pending; {intent.reason}",
             ))
             continue
         qty, price = _execution_qty_price(intent, prices, execution_positions, allow_fractional)
@@ -329,11 +349,18 @@ def trade_once(cfg: Config) -> None:
             continue
         log.info(msg)
         if intent.side == "sell":
-            closed = broker.close_position(intent.symbol)
-            if closed:
+            if intent.sell_entire_position:
+                submitted = broker.close_position(intent.symbol)
+            else:
+                submitted = bool(broker.submit_market_order(intent.symbol, qty, "sell"))
+            if submitted and intent.sell_entire_position:
                 risk.state.clear_symbol(intent.symbol)
             trade_log.log(TradeLogEntry(
-                action="SELL" if closed else "FAIL",
+                action=(
+                    "SELL" if submitted and intent.sell_entire_position
+                    else "TRIM" if submitted
+                    else "FAIL"
+                ),
                 symbol=intent.symbol, mode=mode, qty=qty, price=price,
                 target_dollars=intent.target_dollars, score=score, reason=intent.reason,
             ))

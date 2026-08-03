@@ -43,7 +43,8 @@ The configured signal path is:
 - Universe: `src/data/tech_universe.txt`, capped at `250` symbols
 - Execution: whole-share buys; fractional shares disabled
 - Position sizing: max `5%` per position, max `80%` gross exposure, max `20`
-  positions
+  positions. When a market or macro regime lowers the active gross cap, the bot
+  submits partial `TRIM` sells until projected exposure fits it
 - Signal thresholds: enter at `0.55` or higher; non-core holdings exit when
   the score reaches `0.00` or lower
 - Market regime filter: `QQQ` above/below its `200`-day SMA
@@ -183,7 +184,7 @@ next scheduled slot is used.
 - applies relative strength, static sector caps, dynamic sector
   breadth/volatility sizing, earnings and gap filters, and portfolio VaR;
 - replays position sizing, stop/trailing exits, cooldowns,
-  whole/fractional-share execution, and trading costs.
+  whole/fractional-share execution, active-cap trims, and trading costs.
 
 The economic-cycle overlay is not enabled by default for historical runs even
 though it is enabled for paper/live trading. Supply `--macro-data` (or enable
@@ -205,6 +206,21 @@ guard, a QQQ downtrend (`risk_off_target_pct`), or a macro contraction
 This keeps allocation targets separate from portfolio exposure caps. A
 stop-driven close retains the normal cooldown before the core can be restored.
 The historical simulator uses the same precedence.
+
+### Gross-cap enforcement
+
+Gross limits are enforced against projected holdings, not used only as a new-buy
+gate. If current exposure is above the active cap, the bot first trims any QQQ
+value above its configured core target, then reduces non-core holdings from the
+weakest score upward until the cap is met. A trim sells only the required dollar
+amount; normal score, stop, and risk-off exits still close the full position.
+Whole-share mode rounds trim quantities upward so it does not knowingly leave
+the account above its cap.
+
+Before submitting a trim, the trader checks Alpaca for an existing open sell on
+that symbol. Pending sells are logged as `SKIP` and are not duplicated on the
+next hourly cycle. Live activity uses the `TRIM` action, and the historical
+simulator applies the same ordering and partial-sale accounting.
 
 When ML is enabled, the backtester does **not** use a single model trained on the
 full dataset. It trains ML only on rolling prior windows and tests only the
@@ -335,7 +351,8 @@ short-cycle score measures six-month changes. In expansion the existing risk
 cap remains authoritative; neutral and contraction regimes cap gross exposure
 at `60%` and `30%` respectively. Neutral retains the 50% QQQ core target, while
 contraction sets it to zero. Independently, a QQQ downtrend sets the core target
-to zero and its market-regime cap can reduce gross exposure further.
+to zero and its market-regime cap can reduce gross exposure further. Existing
+holdings are trimmed when a newly active cap is below current exposure.
 
 The downloader requests FRED's initial-release output and indexes every value by
 its historical availability date. Do not substitute a latest-revision FRED CSV:

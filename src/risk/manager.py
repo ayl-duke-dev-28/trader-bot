@@ -42,6 +42,7 @@ class TradeIntent:
     side: str           # 'buy' | 'sell'
     target_dollars: float
     reason: str
+    sell_entire_position: bool = True
 
 
 def _default_state_path(cfg: Config) -> Path:
@@ -285,6 +286,15 @@ class RiskManager:
             normal_max_gross_pct=normal_max_gross_pct,
             target_pct=core_target_pct,
         )
+        self._apply_gross_cap_sells(
+            intents=intents,
+            held=held,
+            scores=scores,
+            equity=equity,
+            max_gross_pct=max_gross_pct,
+            core_symbol=core_symbol,
+            core_target_pct=core_target_pct,
+        )
 
         if self.state.portfolio_guard_tripped():
             log.warning("portfolio drawdown guard tripped; no new buys this cycle")
@@ -295,9 +305,14 @@ class RiskManager:
             return intents
 
         symbols_to_sell = {i.symbol for i in intents if i.side == "sell"}
+        symbols_fully_sold = {
+            i.symbol
+            for i in intents
+            if i.side == "sell" and i.sell_entire_position
+        }
         held_active = {
             s: p for s, p in held.items()
-            if p.market_value > 0 and s not in symbols_to_sell
+            if p.market_value > 0 and s not in symbols_fully_sold
         }
         sector_used = _count_by_sector(held_active.keys())
         open_slots = max(0, max_positions - len(held_active))
@@ -459,6 +474,84 @@ class RiskManager:
         if any(i.symbol == symbol and i.side == "sell" for i in intents):
             return
         intents.append(TradeIntent(symbol, "sell", held[symbol].market_value, "benchmark core risk-off target=0"))
+
+    def _apply_gross_cap_sells(
+        self,
+        intents: list[TradeIntent],
+        held: dict[str, Position],
+        scores: dict[str, float],
+        equity: float,
+        max_gross_pct: float,
+        core_symbol: str,
+        core_target_pct: float,
+    ) -> None:
+        """Trim current holdings until projected gross exposure fits the active cap."""
+        projected = {
+            symbol: max(0.0, float(position.market_value))
+            for symbol, position in held.items()
+        }
+        for intent in intents:
+            if intent.side != "sell" or intent.symbol not in projected:
+                continue
+            if intent.sell_entire_position:
+                projected[intent.symbol] = 0.0
+            else:
+                projected[intent.symbol] = max(
+                    0.0,
+                    projected[intent.symbol] - intent.target_dollars,
+                )
+
+        cap_dollars = max(0.0, equity * max_gross_pct)
+        excess = sum(projected.values()) - cap_dollars
+        if excess <= 1e-6:
+            return
+
+        reductions: list[tuple[str, float]] = []
+        core_value = projected.get(core_symbol, 0.0)
+        core_floor = min(cap_dollars, max(0.0, equity * core_target_pct))
+        core_excess = max(0.0, core_value - core_floor)
+        if core_excess > 0:
+            reductions.append((core_symbol, core_excess))
+
+        non_core = sorted(
+            (
+                (symbol, value)
+                for symbol, value in projected.items()
+                if symbol != core_symbol and value > 0
+            ),
+            key=lambda item: (float(scores.get(item[0], 0.0)), -item[1], item[0]),
+        )
+        reductions.extend(non_core)
+
+        for symbol, reducible in reductions:
+            if excess <= 1e-6:
+                break
+            amount = min(excess, reducible)
+            if amount <= 1e-6:
+                continue
+            current_value = projected[symbol]
+            sell_entire_position = amount >= current_value - 1e-6
+            intents.append(
+                TradeIntent(
+                    symbol=symbol,
+                    side="sell",
+                    target_dollars=amount,
+                    reason=(
+                        f"gross cap rebalance: projected exposure exceeds "
+                        f"{max_gross_pct:.0%} cap"
+                    ),
+                    sell_entire_position=sell_entire_position,
+                )
+            )
+            projected[symbol] = max(0.0, current_value - amount)
+            excess -= amount
+
+        if excess > 1e-6:
+            log.warning(
+                "unable to fully enforce %.0f%% gross cap; $%.2f remains over cap",
+                max_gross_pct * 100,
+                excess,
+            )
 
     def _benchmark_core_buy(
         self,

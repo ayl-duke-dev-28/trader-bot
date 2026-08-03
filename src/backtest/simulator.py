@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date as date_type, datetime, timedelta
 import logging
-from math import sqrt
+from math import ceil, sqrt
 from pathlib import Path
 from typing import Any, Callable
 
@@ -620,6 +620,76 @@ def simulate_current_bot(
                 highwater.pop(sym, None)
                 exited_this_cycle.add(sym)
                 log_trade(date, "SELL", sym, pos.qty, price, score, f"score={score:+.2f} <= exit_thr={exit_thr:+.2f}")
+
+        current_equity = equity_on(date)
+        cap_dollars = current_equity * adjusted_max_gross_pct
+        projected_values = {
+            sym: pos.market_value(price)
+            for sym, pos in positions.items()
+            if (price := price_on(sym, date)) is not None
+        }
+        excess = sum(projected_values.values()) - cap_dollars
+        reductions: list[tuple[str, float]] = []
+        core_value = projected_values.get(core_symbol, 0.0)
+        core_floor = min(cap_dollars, current_equity * core_target_pct)
+        core_excess = max(0.0, core_value - core_floor)
+        if core_excess > 0:
+            reductions.append((core_symbol, core_excess))
+        reductions.extend(
+            sorted(
+                (
+                    (symbol, value)
+                    for symbol, value in projected_values.items()
+                    if symbol != core_symbol and value > 0
+                ),
+                key=lambda item: (float(scores.get(item[0], 0.0)), -item[1], item[0]),
+            )
+        )
+
+        for symbol, reducible in reductions:
+            if excess <= 1e-6:
+                break
+            position = positions.get(symbol)
+            price = price_on(symbol, date)
+            if position is None or price is None:
+                continue
+            requested = min(excess, reducible)
+            raw_qty = requested / price
+            qty = raw_qty if allow_fractional else float(ceil(raw_qty))
+            qty = min(position.qty, qty)
+            if qty <= 0:
+                continue
+            notional = qty * price
+            cash += notional * (1.0 - cost_bps / 10_000.0)
+            remaining_qty = position.qty - qty
+            if remaining_qty <= 1e-9:
+                positions.pop(symbol, None)
+                highwater.pop(symbol, None)
+                exited_this_cycle.add(symbol)
+            else:
+                positions[symbol] = SimPosition(
+                    symbol,
+                    remaining_qty,
+                    position.avg_entry_price,
+                )
+            log_trade(
+                date,
+                "TRIM",
+                symbol,
+                qty,
+                price,
+                scores.get(symbol),
+                f"gross cap rebalance: exposure exceeds {adjusted_max_gross_pct:.0%} cap",
+            )
+            excess -= notional
+
+        if excess > 1e-6:
+            log.warning(
+                "backtest could not fully enforce %.0f%% gross cap on %s; $%.2f remains",
+                adjusted_max_gross_pct * 100,
+                date.date(),
+                excess,
+            )
 
         current_equity = equity_on(date)
         held_value = 0.0

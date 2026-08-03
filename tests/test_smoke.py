@@ -5,7 +5,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -268,6 +268,81 @@ def test_trade_once_passes_alpaca_price_fallback_to_quote_loader():
     assert risk.size_orders.call_args.kwargs["macro_cycles"] is macro_cycles
 
 
+def test_live_trade_cycle_routes_cap_trim_as_partial_sell_order():
+    class DummyConfig:
+        is_live = False
+
+        @staticmethod
+        def get(*keys, default=None):
+            values = {
+                ("dry_run",): False,
+                ("execution", "fractional_shares"): False,
+                ("risk", "earnings_blackout_days"): 0,
+            }
+            return values.get(keys, default)
+
+    position = Position(
+        "AAPL",
+        qty=200.0,
+        avg_entry_price=80.0,
+        market_value=20_000.0,
+        unrealized_plpc=0.25,
+    )
+    broker = MagicMock()
+    broker.is_market_open.return_value = True
+    broker.positions.return_value = [position]
+    pending_sells: set[str] = set()
+    broker.open_order_symbols.side_effect = (
+        lambda side=None: pending_sells if side == "sell" else set()
+    )
+    broker.submit_market_order.return_value = "trim-order-id"
+    risk = MagicMock()
+    risk.apply_portfolio_drawdown_guard.return_value = False
+    risk.size_orders.return_value = [
+        TradeIntent(
+            "AAPL",
+            "sell",
+            10_000.0,
+            "gross cap rebalance",
+            sell_entire_position=False,
+        )
+    ]
+    trade_log = MagicMock()
+
+    with (
+        patch("src.trader.AlpacaBroker", return_value=broker),
+        patch("src.trader.trade_logger_from_config", return_value=trade_log),
+        patch("src.trader.RiskManager", return_value=risk),
+        patch("src.trader.load_universe", return_value=["AAPL"]),
+        patch("src.trader._history_for_all", return_value={}),
+        patch("src.trader.compute_signals", return_value={"AAPL": 0.10}),
+        patch("src.trader._load_live_macro_cycles", return_value=None),
+        patch("src.trader._last_prices", return_value={"AAPL": 100.0}),
+    ):
+        from src.trader import trade_once
+
+        trade_once(DummyConfig())
+        broker.submit_market_order.assert_called_once_with("AAPL", 100.0, "sell")
+        broker.close_position.assert_not_called()
+        assert broker.open_order_symbols.call_args_list == [
+            call(side="buy"),
+            call(side="sell"),
+        ]
+        risk.state.clear_symbol.assert_not_called()
+        assert trade_log.log.call_args.args[0].action == "TRIM"
+
+        pending_sells.add("AAPL")
+        broker.submit_market_order.reset_mock()
+        broker.open_order_symbols.reset_mock()
+        trade_log.log.reset_mock()
+        trade_once(DummyConfig())
+
+        broker.submit_market_order.assert_not_called()
+        broker.close_position.assert_not_called()
+        assert trade_log.log.call_args.args[0].action == "SKIP"
+        assert "sell already pending" in trade_log.log.call_args.args[0].reason
+
+
 def test_size_orders_skips_non_finite_quote():
     class DummyConfig:
         def get(self, *keys, default=None):
@@ -352,6 +427,173 @@ def test_execution_qty_rejects_nan_buy_and_falls_back_for_sell():
     )
     assert sell_qty == 25.0
     assert sell_price == 85.0
+
+
+def test_partial_sell_execution_uses_target_dollars_instead_of_closing_position():
+    intent = TradeIntent(
+        "AAPL",
+        "sell",
+        10_000.0,
+        "gross cap rebalance",
+        sell_entire_position=False,
+    )
+    position = Position(
+        "AAPL",
+        qty=200.0,
+        avg_entry_price=80.0,
+        market_value=20_000.0,
+        unrealized_plpc=0.25,
+    )
+
+    qty, price = _execution_qty_price(
+        intent,
+        prices={"AAPL": 100.0},
+        positions={"AAPL": position},
+        allow_fractional=False,
+    )
+
+    assert qty == 100.0
+    assert price == 100.0
+
+
+def test_active_gross_cap_creates_only_the_required_partial_sell():
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            values = {
+                ("risk", "max_position_pct"): 0.05,
+                ("risk", "max_gross_exposure"): 0.80,
+                ("risk", "max_positions"): 20,
+                ("risk", "entry_score_threshold"): 0.55,
+                ("risk", "exit_score_threshold"): 0.0,
+                ("risk", "gap_skip_pct"): 0.99,
+                ("risk", "sector_caps"): {"mega_cap_tech": 5, "etf_tech": 3},
+                ("risk", "market_regime"): {"enabled": False},
+                ("risk", "macro_cycle"): {
+                    "enabled": True,
+                    "neutral_max_gross_exposure": 0.60,
+                    "contraction_max_gross_exposure": 0.30,
+                },
+                ("risk", "benchmark_core"): {
+                    "enabled": True,
+                    "symbol": "QQQ",
+                    "risk_on_target_pct": 0.50,
+                    "neutral_target_pct": 0.50,
+                    "contraction_target_pct": 0.0,
+                    "risk_off_target_pct": 0.0,
+                    "min_trade_dollars": 100,
+                },
+                ("risk", "relative_strength"): {"enabled": False},
+                ("risk", "sector_risk"): {"enabled": False},
+                ("risk", "value_at_risk"): {"enabled": False},
+            }
+            return values.get(keys, default)
+
+    class DummyBroker:
+        @staticmethod
+        def account():
+            return Account(100_000.0, 30_000.0, 30_000.0, 100_000.0)
+
+        @staticmethod
+        def positions():
+            return [
+                Position("QQQ", 500.0, 80.0, 50_000.0, 0.25),
+                Position("AAPL", 200.0, 80.0, 20_000.0, 0.25),
+            ]
+
+    class DummyState:
+        @staticmethod
+        def portfolio_guard_tripped():
+            return False
+
+        @staticmethod
+        def day_start_equity(equity):
+            return equity
+
+        @staticmethod
+        def in_cooldown(symbol):
+            return False
+
+    as_of = pd.Timestamp("2026-07-31")
+    macro_cycles = pd.DataFrame(
+        {
+            "long_score": [-0.10],
+            "short_score": [-0.10],
+            "composite_score": [-0.10],
+            "regime": ["neutral"],
+        },
+        index=[as_of],
+    )
+    risk = RiskManager(DummyConfig(), DummyBroker(), state=DummyState())
+
+    intents = risk.size_orders(
+        scores={"QQQ": 0.10, "AAPL": 0.10},
+        prices={"QQQ": 100.0, "AAPL": 100.0},
+        history={},
+        macro_cycles=macro_cycles,
+        as_of=as_of,
+    )
+
+    assert len(intents) == 1
+    assert intents[0].symbol == "AAPL"
+    assert intents[0].side == "sell"
+    assert intents[0].target_dollars == 10_000.0
+    assert intents[0].sell_entire_position is False
+    assert "gross cap" in intents[0].reason
+
+
+def test_gross_cap_trims_core_growth_above_target_before_other_holdings():
+    class DummyConfig:
+        @staticmethod
+        def get(*keys, default=None):
+            return default
+
+    risk = RiskManager(DummyConfig(), broker=object(), state=object())
+    intents: list[TradeIntent] = []
+    held = {
+        "QQQ": Position("QQQ", 550.0, 80.0, 55_000.0, 0.25),
+        "AAPL": Position("AAPL", 100.0, 80.0, 10_000.0, 0.25),
+    }
+
+    risk._apply_gross_cap_sells(
+        intents=intents,
+        held=held,
+        scores={"QQQ": 0.50, "AAPL": -0.50},
+        equity=100_000.0,
+        max_gross_pct=0.60,
+        core_symbol="QQQ",
+        core_target_pct=0.50,
+    )
+
+    assert len(intents) == 1
+    assert intents[0].symbol == "QQQ"
+    assert intents[0].target_dollars == 5_000.0
+    assert intents[0].sell_entire_position is False
+
+
+def test_gross_cap_accounts_for_full_exits_already_planned():
+    class DummyConfig:
+        @staticmethod
+        def get(*keys, default=None):
+            return default
+
+    risk = RiskManager(DummyConfig(), broker=object(), state=object())
+    existing = TradeIntent("AAPL", "sell", 20_000.0, "score exit")
+    intents = [existing]
+
+    risk._apply_gross_cap_sells(
+        intents=intents,
+        held={
+            "QQQ": Position("QQQ", 500.0, 80.0, 50_000.0, 0.25),
+            "AAPL": Position("AAPL", 200.0, 80.0, 20_000.0, 0.25),
+        },
+        scores={"QQQ": 0.50, "AAPL": -0.50},
+        equity=100_000.0,
+        max_gross_pct=0.60,
+        core_symbol="QQQ",
+        core_target_pct=0.50,
+    )
+
+    assert intents == [existing]
 
 
 def test_alpaca_read_retry_recovers_from_connection_reset():
@@ -692,6 +934,108 @@ def test_backtest_does_not_churn_risk_on_benchmark_core_on_neutral_score():
     assert neutral_result.summary["buys"] == 1
     assert neutral_result.summary["sells"] == 0
     assert neutral_result.summary["macro_min_gross_exposure"] == 0.60
+
+
+def test_backtest_trims_existing_positions_when_macro_cap_falls():
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            values = {
+                ("execution", "fractional_shares"): True,
+                ("strategies", "momentum_breakout", "enabled"): False,
+                ("strategies", "hedge_fund", "enabled"): True,
+                ("strategies", "ml", "enabled"): False,
+                ("risk", "max_position_pct"): 0.05,
+                ("risk", "max_gross_exposure"): 0.80,
+                ("risk", "max_positions"): 20,
+                ("risk", "entry_score_threshold"): 0.55,
+                ("risk", "exit_score_threshold"): 0.0,
+                ("risk", "gap_skip_pct"): 0.99,
+                ("risk", "cooldown_days"): 3,
+                ("risk", "trailing_activate_pct"): 10.0,
+                ("risk", "trailing_giveback_pct"): 1.0,
+                ("risk", "earnings_blackout_days"): 0,
+                ("risk", "stop_atr_mult"): 100.0,
+                ("risk", "stop_min_pct"): 0.99,
+                ("risk", "stop_max_pct"): 0.99,
+                ("risk", "sector_caps"): {"mega_cap_tech": 20, "etf_tech": 3},
+                ("risk", "market_regime"): {"enabled": False},
+                ("risk", "macro_cycle"): {"enabled": False},
+                ("risk", "benchmark_core"): {
+                    "enabled": True,
+                    "symbol": "QQQ",
+                    "risk_on_target_pct": 0.50,
+                    "neutral_target_pct": 0.50,
+                    "contraction_target_pct": 0.0,
+                    "risk_off_target_pct": 0.0,
+                    "min_trade_dollars": 100,
+                },
+                ("risk", "relative_strength"): {"enabled": False},
+                ("risk", "sector_risk"): {"enabled": False},
+                ("risk", "value_at_risk"): {"enabled": False},
+                ("risk", "portfolio_drawdown_guard"): {"enabled": False},
+                ("data", "history_days"): 80,
+                ("backtest", "warmup_days"): 0,
+            }
+            return values.get(keys, default)
+
+    idx = pd.date_range("2025-01-01", periods=90, freq="B")
+    symbols = ["QQQ", "AAPL", "MSFT", "GOOG", "META", "AMZN", "ORCL"]
+    history = {
+        symbol: pd.DataFrame(
+            {
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0,
+                "volume": 1_000_000,
+            },
+            index=idx,
+        )
+        for symbol in symbols
+    }
+    score_cache = {
+        symbol: pd.Series(1.0, index=idx)
+        for symbol in symbols
+    }
+    macro_cycles = pd.DataFrame(
+        {
+            "long_score": [0.30, -0.10],
+            "short_score": [0.30, -0.10],
+            "composite_score": [0.30, -0.10],
+            "regime": ["expansion", "neutral"],
+        },
+        index=[idx[0], idx[65]],
+    )
+
+    with patch(
+        "src.backtest.simulator._precompute_hedge_fund_scores",
+        return_value=score_cache,
+    ):
+        result = backtest(
+            DummyConfig(),
+            history,
+            start_date=idx[60],
+            end_date=idx[70],
+            start_capital=100_000.0,
+            cost_bps=0.0,
+            walk_forward=False,
+            macro_cycles=macro_cycles,
+            macro_cycle_config={
+                "enabled": True,
+                "neutral_max_gross_exposure": 0.60,
+                "contraction_max_gross_exposure": 0.30,
+            },
+        )
+
+    neutral_curve = result.equity_diagnostics.loc[
+        result.equity_diagnostics["macro_regime"] == "neutral"
+    ]
+    actual_gross = (
+        (neutral_curve["equity"] - neutral_curve["cash"])
+        / neutral_curve["equity"]
+    )
+    assert (actual_gross <= 0.600001).all()
+    assert (result.trades_log["action"] == "TRIM").any()
 
 
 def test_relative_strength_blocks_lagging_symbol():
