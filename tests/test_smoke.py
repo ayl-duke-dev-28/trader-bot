@@ -532,6 +532,33 @@ def test_risk_on_benchmark_core_ignores_negative_score_exit():
     assert intents == []
 
 
+def test_benchmark_core_still_exits_when_regime_target_is_zero():
+    class DummyConfig:
+        def get(self, *keys, default=None):
+            if keys == ("risk", "benchmark_core"):
+                return {
+                    "enabled": True,
+                    "symbol": "QQQ",
+                    "risk_on_target_pct": 0.50,
+                    "risk_off_target_pct": 0.0,
+                }
+            return default
+
+    risk = RiskManager(DummyConfig(), broker=object(), state=object())
+    intents = []
+
+    risk._apply_benchmark_core_sells(
+        intents=intents,
+        held={"QQQ": Position("QQQ", 500.0, 100.0, 50_000.0, 0.0)},
+        max_gross_pct=0.20,
+        normal_max_gross_pct=0.80,
+    )
+
+    assert len(intents) == 1
+    assert intents[0].side == "sell"
+    assert intents[0].reason == "benchmark core risk-off target=0"
+
+
 def test_backtest_does_not_churn_risk_on_benchmark_core_on_neutral_score():
     class DummyConfig:
         def get(self, *keys, default=None):

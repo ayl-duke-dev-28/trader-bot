@@ -248,11 +248,24 @@ class RiskManager:
         remaining_gross = max(0.0, equity * max_gross_pct - held_value)
 
         intents: list[TradeIntent] = []
+        core_symbol = self._benchmark_core_symbol()
+        core_target_pct = self._benchmark_core_target_pct(
+            max_gross_pct,
+            normal_max_gross_pct,
+        )
 
         # 1) Sells: hysteresis — only exit when score has drifted to zero.
         for sym, p in held.items():
             score = scores.get(sym, 0.0)
             if score <= exit_thr:
+                if sym == core_symbol and core_target_pct > 0:
+                    log.info(
+                        "[HOLD] benchmark core %s despite score=%+.2f; target=%d%%",
+                        sym,
+                        score,
+                        round(core_target_pct * 100),
+                    )
+                    continue
                 intents.append(
                     TradeIntent(
                         sym, "sell", p.market_value,
@@ -283,7 +296,6 @@ class RiskManager:
         sector_used = _count_by_sector(held_active.keys())
         open_slots = max(0, max_positions - len(held_active))
 
-        core_symbol = self._benchmark_core_symbol()
         core_intent = None
         if core_symbol in symbols_to_sell:
             log.info("[SKIP] benchmark core %s has a sell intent this cycle", core_symbol)

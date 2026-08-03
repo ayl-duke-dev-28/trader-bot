@@ -574,6 +574,8 @@ def simulate_current_bot(
         for sym, pos in list(positions.items()):
             score = float(scores.get(sym, 0.0))
             if score <= exit_thr:
+                if sym == core_symbol and core_target_pct > 0:
+                    continue
                 price = price_on(sym, date)
                 if price is None:
                     continue
