@@ -47,7 +47,9 @@ The configured signal path is:
   submits partial `TRIM` sells until projected exposure fits it
 - Signal thresholds: enter at `0.55` or higher; non-core holdings exit when
   the score reaches `0.00` or lower
-- Market regime filter: `QQQ` above/below its `200`-day SMA
+- Market regime filter: `QQQ` above/below its `200`-day SMA; missing,
+  insufficient, invalid, or lagging QQQ history blocks all new buys while
+  leaving risk-reducing exits available
 - Benchmark core: `QQQ`, `50%` target when its trend is risk-on, including a
   neutral macro regime; a QQQ downtrend or macro contraction sets the target to
   zero. While the target is positive, a negative QQQ ensemble score does not
@@ -206,6 +208,25 @@ guard, a QQQ downtrend (`risk_off_target_pct`), or a macro contraction
 This keeps allocation targets separate from portfolio exposure caps. A
 stop-driven close retains the normal cooldown before the core can be restored.
 The historical simulator uses the same precedence.
+
+### Missing QQQ benchmark data
+
+The market-regime state has three outcomes: risk-on, risk-off, or unavailable.
+QQQ is unavailable when its configured history is missing, contains fewer than
+the 200 bars required for the SMA, cannot produce a valid SMA, or ends before
+the latest history date available for the rest of the universe.
+
+An unavailable benchmark freezes all new buys for that cycle. Existing
+score-based exits, stop and trailing exits, macro-contraction decisions, and
+gross-cap trims remain allowed because they reduce risk. Missing data alone is
+not treated as a QQQ downtrend and does not force the existing benchmark core to
+close; the runtime emits `market regime benchmark unavailable; blocking all
+buys this cycle`.
+
+The historical simulator applies the same rule. Its daily diagnostics include
+`market_regime_data_available`, and the summary reports
+`market_regime_unavailable_days` so backtests expose windows that were frozen by
+missing benchmark data rather than silently treating them as risk-on.
 
 ### Gross-cap enforcement
 
