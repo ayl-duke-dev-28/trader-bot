@@ -67,6 +67,9 @@ The configured signal path is:
 - Quote recovery and safety: missing or invalid Yahoo prices are retried in one
   Alpaca IEX latest-trade request; unresolved, non-numeric, non-positive, `NaN`,
   and infinite prices are rejected before sizing without aborting the cycle
+- Order reconciliation: accepted Alpaca order IDs are persisted across restarts;
+  any unresolved order blocks both buys and sells for its symbol until Alpaca
+  reports a terminal result
 - Portfolio drawdown guard: implemented but disabled
 - Portfolio VaR: enabled; one-day 99% historical simulation over 252 aligned
   returns, minimum 60 observations, 3% VaR and 4% expected-shortfall limits,
@@ -176,6 +179,30 @@ the laptop lid or manually sleeping the Mac can still suspend it. If a wake-up
 occurs more than five minutes after a slot, the stale cycle is skipped and the
 next scheduled slot is used.
 
+## Broker order reconciliation
+
+An Alpaca submission response means the broker accepted the request; it does
+not mean the order filled. The bot therefore records every accepted order ID in
+`data_cache/state/risk_state.json` and reconciles it at the start of each open-
+market cycle.
+
+- `new`, accepted, pending, and partially filled orders remain in the ledger.
+- While an order is unresolved, all new buys and sells for that symbol are
+  skipped, including stops, portfolio-drawdown closes, and sizing intents.
+- A confirmed fill removes the ledger entry. A confirmed full-position sell
+  then clears its trailing high-water state; a filled stop also starts the
+  configured cooldown.
+- Rejected, canceled, expired, and other terminal unfilled orders are removed
+  without clearing position state or starting a cooldown, so a later cycle can
+  reassess the symbol.
+- If the status lookup fails, the order stays pending and the symbol stays
+  blocked. This favors missing a trade over submitting a duplicate.
+
+The bot also asks Alpaca for all currently open-order symbols before risk checks
+and again before execution. This catches active broker orders that predate the
+local ledger. Order submission is logged as `SUBMIT`; a later reconciliation
+cycle logs `FILLED` or Alpaca's terminal status using the same `order_id`.
+
 ## Backtesting
 
 `python scripts/backtest.py` is the primary trust check. By default it:
@@ -238,10 +265,12 @@ amount; normal score, stop, and risk-off exits still close the full position.
 Whole-share mode rounds trim quantities upward so it does not knowingly leave
 the account above its cap.
 
-Before submitting a trim, the trader checks Alpaca for an existing open sell on
-that symbol. Pending sells are logged as `SKIP` and are not duplicated on the
-next hourly cycle. Live activity uses the `TRIM` action, and the historical
-simulator applies the same ordering and partial-sale accounting.
+Before submitting a trim, the trader checks the persisted order ledger and
+Alpaca's open orders. Any pending order on that symbol—not only another sell—is
+logged as `SKIP` and is not duplicated on the next hourly cycle. Live activity
+uses `SUBMIT` when Alpaca accepts the trim and `FILLED` after reconciliation;
+the historical simulator continues to use `TRIM` for its synchronous simulated
+fills and applies the same trim ordering and partial-sale accounting.
 
 When ML is enabled, the backtester does **not** use a single model trained on the
 full dataset. It trains ML only on rolling prior windows and tests only the
@@ -551,13 +580,14 @@ Important local/generated files:
 
 ## Trade activity log
 
-Broker-facing buys, sells, stop-loss closes, dry-run intents, failures, and
-selected execution skips are appended to an Excel file so you can review why an
-order was or was not submitted.
+Broker submissions, later fill or terminal-status reconciliation, dry-run
+intents, failures, and selected execution skips are appended to an Excel file
+so you can review both why an order was submitted and how Alpaca resolved it.
 
 - Default path: `logs/trades.xlsx` (configurable via `logging.trades_file` in `config.yaml`).
 - Columns: `timestamp, mode, action, symbol, qty, price, target_dollars, score, reason, order_id`.
-- Actions: `BUY`, `SELL`, `STOP` (stop-loss / trailing lock), `SKIP`, `DRY`, `FAIL`.
+- Actions: `SUBMIT`, `FILLED`, terminal Alpaca statuses such as `REJECTED` or
+  `CANCELED`, plus `SKIP`, `DRY`, and `FAIL`.
 - The `reason` column carries the exact signal/sizing/stop trigger (e.g. `score=+0.42 sector=tech`, `stop pl=-6.20% vs -4.00%`).
 - The file is created on the first logged action — until then it won't exist on disk.
 
@@ -593,7 +623,7 @@ docs/
 models/
   xgb_direction.joblib   trained ML model artifact (ignored)
 data_cache/
-  state/risk_state.json  day equity, stop cooldowns, and high-water marks (ignored)
+  state/risk_state.json  day equity, cooldowns, high-water marks, pending orders (ignored)
 reports/backtests/
   benchmark_aware_5y/    pre-overlay 5-year benchmark-aware baseline
   walk_forward_5y/       pre-overlay 5-year walk-forward baseline
@@ -637,11 +667,12 @@ tests/                   smoke tests (no network)
   unresolved, non-numeric, non-positive, `NaN`, or infinite price is logged and
   skipped. The same finite-positive validation is repeated during risk planning
   and immediately before execution.
-- Read-only Alpaca calls (account, positions, clock, open orders, latest trades)
-  retry on transient network errors. Order submission does **not** retry: a reset
-  mid-submit leaves the order's fate unknown, and a blind retry risks duplicating
-  a filled order. Those failures are logged as `FAIL` in the trade log and left
-  for the next cycle.
+- Read-only Alpaca calls (account, positions, clock, open orders, latest trades,
+  order status) retry on transient network errors. Order submission does **not**
+  retry: a reset mid-submit can leave the order's fate unknown, and a blind retry
+  risks duplicating a fill. Accepted responses are persisted and reconciled;
+  failed responses are logged as `FAIL`, while Alpaca's open-order query provides
+  an additional next-cycle guard for an active order whose ID was not received.
 - A serialized XGBoost model may warn when loaded by a different XGBoost version.
   Retrain with `python scripts/train_models.py` after dependency upgrades rather
   than relying on cross-version pickle compatibility.
