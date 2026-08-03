@@ -5,7 +5,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -291,10 +291,8 @@ def test_live_trade_cycle_routes_cap_trim_as_partial_sell_order():
     broker = MagicMock()
     broker.is_market_open.return_value = True
     broker.positions.return_value = [position]
-    pending_sells: set[str] = set()
-    broker.open_order_symbols.side_effect = (
-        lambda side=None: pending_sells if side == "sell" else set()
-    )
+    pending_symbols: set[str] = set()
+    broker.open_order_symbols.side_effect = lambda side=None: pending_symbols
     broker.submit_market_order.return_value = "trim-order-id"
     risk = MagicMock()
     risk.apply_portfolio_drawdown_guard.return_value = False
@@ -324,14 +322,11 @@ def test_live_trade_cycle_routes_cap_trim_as_partial_sell_order():
         trade_once(DummyConfig())
         broker.submit_market_order.assert_called_once_with("AAPL", 100.0, "sell")
         broker.close_position.assert_not_called()
-        assert broker.open_order_symbols.call_args_list == [
-            call(side="buy"),
-            call(side="sell"),
-        ]
+        broker.open_order_symbols.assert_called_once_with()
         risk.state.clear_symbol.assert_not_called()
         assert trade_log.log.call_args.args[0].action == "TRIM"
 
-        pending_sells.add("AAPL")
+        pending_symbols.add("AAPL")
         broker.submit_market_order.reset_mock()
         broker.open_order_symbols.reset_mock()
         trade_log.log.reset_mock()
