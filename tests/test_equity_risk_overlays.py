@@ -321,6 +321,38 @@ def test_market_regime_state_rejects_short_or_lagging_qqq_history():
     assert risk._market_regime_state({"QQQ": complete_qqq}) is True
 
 
+def test_market_regime_state_accepts_previous_close_during_current_session():
+    class DummyConfig:
+        @staticmethod
+        def get(*keys, default=None):
+            if keys == ("risk", "market_regime"):
+                return {
+                    "enabled": True,
+                    "benchmark_symbol": "QQQ",
+                    "sma_window": 20,
+                }
+            if keys == ("schedule", "market_timezone"):
+                return "America/New_York"
+            return default
+
+    risk = RiskManager(DummyConfig(), broker=object(), state=object())
+    as_of = pd.Timestamp("2026-08-11")
+    completed_sessions = pd.bdate_range(end=as_of - pd.offsets.BDay(1), periods=20)
+    qqq = pd.DataFrame(
+        {"close": np.linspace(100.0, 120.0, len(completed_sessions))},
+        index=completed_sessions,
+    )
+    current_session_symbol = pd.DataFrame(
+        {"close": np.linspace(100.0, 121.0, len(completed_sessions) + 1)},
+        index=completed_sessions.append(pd.DatetimeIndex([as_of])),
+    )
+
+    assert risk._market_regime_state(
+        {"QQQ": qqq, "AAPL": current_session_symbol},
+        as_of=as_of,
+    ) is True
+
+
 def test_live_macro_loader_builds_cycles_from_fresh_point_in_time_cache(tmp_path):
     dates = pd.date_range(end=pd.Timestamp.now().normalize(), periods=48, freq="MS")
     panel = pd.DataFrame(
