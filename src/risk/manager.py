@@ -704,6 +704,8 @@ class RiskManager:
     def _market_regime_state(
         self,
         history: dict[str, pd.DataFrame],
+        *,
+        as_of: pd.Timestamp | None = None,
     ) -> bool | None:
         """Return risk-on/off, or ``None`` when benchmark data is unavailable."""
         regime_cfg = self._r("market_regime", default={}) or {}
@@ -723,7 +725,23 @@ class RiskManager:
         if benchmark_date.tzinfo is not None:
             benchmark_date = benchmark_date.tz_localize(None)
         if benchmark_date < latest_history_date:
-            return None
+            timezone = str(
+                self.cfg.get(
+                    "schedule",
+                    "market_timezone",
+                    default="America/New_York",
+                )
+            )
+            session_date = as_of or pd.Timestamp.now(tz=timezone)
+            session_date = pd.Timestamp(session_date)
+            if session_date.tzinfo is not None:
+                session_date = session_date.tz_localize(None)
+            session_date = session_date.normalize()
+            previous_session = session_date - pd.offsets.BDay(1)
+            current_session_bar_present = latest_history_date.normalize() == session_date
+            benchmark_has_previous_close = benchmark_date.normalize() >= previous_session
+            if not (current_session_bar_present and benchmark_has_previous_close):
+                return None
         sma = close.rolling(window).mean().iloc[-1]
         if sma != sma:
             return None
