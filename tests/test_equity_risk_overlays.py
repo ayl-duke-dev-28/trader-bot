@@ -352,6 +352,16 @@ def test_market_regime_state_accepts_previous_close_during_current_session():
         as_of=as_of,
     ) is True
 
+    stale_sessions = pd.bdate_range(end=as_of - pd.offsets.BDay(2), periods=20)
+    stale_qqq = pd.DataFrame(
+        {"close": np.linspace(100.0, 120.0, len(stale_sessions))},
+        index=stale_sessions,
+    )
+    assert risk._market_regime_state(
+        {"QQQ": stale_qqq, "AAPL": current_session_symbol},
+        as_of=as_of,
+    ) is None
+
 
 def test_live_macro_loader_builds_cycles_from_fresh_point_in_time_cache(tmp_path):
     dates = pd.date_range(end=pd.Timestamp.now().normalize(), periods=48, freq="MS")
