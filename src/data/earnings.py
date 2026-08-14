@@ -13,6 +13,7 @@ from pathlib import Path
 import yfinance as yf
 
 from src.config import Config, ROOT
+from src.data.market_data import yahoo_symbol
 
 log = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ def _first_future_date(dates_field) -> str | None:
 
 def _fetch_next_earnings(symbol: str) -> str | None:
     try:
-        cal = yf.Ticker(symbol).calendar
+        cal = yf.Ticker(yahoo_symbol(symbol)).calendar
     except Exception as e:
         log.debug("earnings fetch failed for %s: %s", symbol, e)
         return None

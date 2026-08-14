@@ -5,6 +5,11 @@ Symbols not listed fall through to `other`.
 """
 from __future__ import annotations
 
+import csv
+from pathlib import Path
+
+from src.config import ROOT
+
 SECTOR_MAP: dict[str, str] = {
     # Mega-cap tech — moves with QQQ / broad market.
     "AAPL": "mega_cap_tech",
@@ -326,6 +331,35 @@ for _sector, _symbols in _BROAD_SECTOR_SYMBOLS.items():
     for _symbol in _symbols:
         # Preserve the original universe's more specific thematic buckets.
         SECTOR_MAP.setdefault(_symbol, _sector)
+
+_GICS_TO_SECTOR = {
+    "Communication Services": "communications",
+    "Consumer Discretionary": "consumer_discretionary",
+    "Consumer Staples": "consumer_staples",
+    "Energy": "energy",
+    "Financials": "financials",
+    "Health Care": "healthcare",
+    "Industrials": "industrials",
+    "Information Technology": "technology",
+    "Materials": "materials",
+    "Real Estate": "real_estate",
+    "Utilities": "utilities",
+}
+
+
+def _load_sp500_sectors(path: Path = ROOT / "src/data/sp500_universe.csv") -> None:
+    """Add GICS classifications while preserving more specific theme buckets."""
+    if not path.exists():
+        return
+    with path.open(newline="") as handle:
+        for row in csv.DictReader(handle):
+            symbol = str(row.get("Symbol", "")).strip().upper()
+            sector = _GICS_TO_SECTOR.get(str(row.get("GICS Sector", "")).strip())
+            if symbol and sector:
+                SECTOR_MAP.setdefault(symbol, sector)
+
+
+_load_sp500_sectors()
 
 
 def sector_for(symbol: str) -> str:

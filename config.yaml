@@ -13,7 +13,8 @@ universe:
   file_paths:
     - src/data/tech_universe.txt
     - src/data/nyse_universe.txt
-  max_symbols: 400     # currently 360 liquid US stocks and ETFs after deduplication
+    - src/data/sp500_universe.csv
+  max_symbols: 700     # currently 687 unique symbols after deduplication
 
 data:
   history_days: 400    # how much daily history to pull per symbol
@@ -178,6 +179,8 @@ risk:
     industrials: 4
     healthcare: 4
     real_estate: 3
+    materials: 4
+    technology: 4
     other: 4
 
   # overnight gap protection

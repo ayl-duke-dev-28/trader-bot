@@ -45,11 +45,22 @@ def test_legacy_single_file_path_remains_supported(tmp_path: Path):
     assert load_universe(cfg) == ["QQQ", "NVDA"]
 
 
+def test_csv_universe_reads_symbol_column(tmp_path: Path):
+    universe_file = tmp_path / "symbols.csv"
+    universe_file.write_text("Symbol,GICS Sector\naapl,Information Technology\nJPM,Financials\n")
+
+    cfg = _config({"source": "file", "file_paths": [str(universe_file)], "max_symbols": 10})
+
+    assert load_universe(cfg) == ["AAPL", "JPM"]
+
+
 def test_default_config_loads_expanded_diversified_universe():
     symbols = load_universe(load_config(require_secrets=False))
 
-    assert len(symbols) == 360
-    assert {"AAPL", "JPM", "XOM", "LLY", "CAT", "QQQ"}.issubset(symbols)
+    assert len(symbols) == 687
+    assert {"AAPL", "JPM", "XOM", "LLY", "CAT", "QQQ", "APD", "AFL"}.issubset(symbols)
     assert sector_for("JPM") == "financials"
     assert sector_for("XOM") == "energy"
     assert sector_for("LLY") == "healthcare"
+    assert sector_for("APD") == "materials"
+    assert sector_for("AOS") == "industrials"

@@ -40,9 +40,8 @@ The configured signal path is:
 
 - Mode: `paper`
 - Dry run: disabled
-- Universe: the merged `src/data/tech_universe.txt` and
-  `src/data/nyse_universe.txt` lists, currently `360` unique symbols and capped
-  at `400`
+- Universe: the merged tech, liquid-US, and S&P 500 lists, currently `687`
+  unique symbols and capped at `700`
 - Execution: whole-share buys; fractional shares disabled
 - Position sizing: max `5%` per position, max `80%` gross exposure, max `20`
   positions. When a market or macro regime lowers the active gross cap, the bot
@@ -684,6 +683,11 @@ tests/                   smoke tests (no network)
   shortfall and the separate stress suite are retained because VaR alone does
   not describe the severity of losses beyond its cutoff.
 - Politician-disclosure feeds are community-maintained and may move; URLs are in `src/politicians/tracker.py`.
-- Universe defaults to a merged 360-symbol set of tech-focused and liquid broad-market US listings. Larger universes work in principle but invite rate-limiting on free APIs.
+- Universe defaults to a merged 687-symbol set: the curated tech and liquid-US
+  lists plus an S&P 500 snapshot. The snapshot in
+  `src/data/sp500_universe.csv` was retrieved on August 14, 2026 from the
+  community-maintained `datasets/s-and-p-500-companies` dataset, which tracks
+  the public S&P constituent table. Refresh it when index membership changes.
+  Larger universes work in principle but invite rate-limiting on free APIs.
 - Backtests use today's configured universe and available historical data, so old periods exclude symbols that did not yet have enough history.
 - This is a tool, not investment advice.

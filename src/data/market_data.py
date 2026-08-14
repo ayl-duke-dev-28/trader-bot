@@ -13,6 +13,11 @@ from src.config import Config, ROOT
 log = logging.getLogger(__name__)
 
 
+def yahoo_symbol(symbol: str) -> str:
+    """Translate class-share notation from broker format to Yahoo format."""
+    return symbol.replace(".", "-")
+
+
 def _cache_path(cfg: Config, symbol: str) -> Path:
     cache_dir = Path(cfg.get("data", "cache_dir", default="data_cache"))
     if not cache_dir.is_absolute():
@@ -79,7 +84,7 @@ def get_history(
     start = (datetime.now(UTC) - timedelta(days=days + 30)).date()
     try:
         df = yf.download(
-            symbol,
+            yahoo_symbol(symbol),
             start=start.isoformat(),
             progress=False,
             auto_adjust=True,

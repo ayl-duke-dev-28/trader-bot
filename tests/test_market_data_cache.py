@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from src.config import Config
-from src.data.market_data import get_history
+from src.data.market_data import get_history, yahoo_symbol
 
 
 def _download_frame(days: int = 40) -> pd.DataFrame:
@@ -29,6 +29,10 @@ def _download_frame(days: int = 40) -> pd.DataFrame:
 
 
 class MarketDataCacheTests(unittest.TestCase):
+    def test_class_share_symbol_is_translated_for_yahoo(self):
+        self.assertEqual(yahoo_symbol("BRK.B"), "BRK-B")
+        self.assertEqual(yahoo_symbol("AAPL"), "AAPL")
+
     def test_csv_cache_is_written_and_reused_when_parquet_engine_is_missing(self):
         with TemporaryDirectory() as tmp:
             cfg = Config(raw={"data": {"cache_dir": tmp}}, api_key="", api_secret="", is_live=False)

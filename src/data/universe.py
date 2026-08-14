@@ -1,6 +1,7 @@
 """Load a deterministic trading universe from one or more static symbol files."""
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 from src.config import Config, ROOT
@@ -29,11 +30,23 @@ def load_universe(cfg: Config) -> list[str]:
         if not path.is_absolute():
             path = ROOT / path
 
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
+        if path.suffix.lower() == ".csv":
+            with path.open(newline="") as handle:
+                reader = csv.DictReader(handle)
+                if not reader.fieldnames or "Symbol" not in reader.fieldnames:
+                    raise ValueError(f"universe CSV {path} must contain a Symbol column")
+                file_symbols = [str(row.get("Symbol", "")).strip() for row in reader]
+        else:
+            file_symbols = (
+                line.strip()
+                for line in path.read_text().splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            )
+
+        for raw_symbol in file_symbols:
+            sym = raw_symbol.upper()
+            if not sym:
                 continue
-            sym = line.upper()
             if sym in seen:
                 continue
             seen.add(sym)

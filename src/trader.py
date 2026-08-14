@@ -16,7 +16,7 @@ from src.broker.alpaca_client import AlpacaBroker, Position
 from src.config import Config, ROOT, load_config
 from src.data.earnings import near_earnings, next_earnings_dates
 from src.data.macro import load_macro_panel, macro_cycle_history
-from src.data.market_data import get_history, get_history_many
+from src.data.market_data import get_history, get_history_many, yahoo_symbol
 from src.data.universe import load_universe
 from src.politicians.tracker import politician_signals
 from src.risk.manager import RiskManager, TradeIntent
@@ -193,18 +193,20 @@ def _last_prices(
         return out
     raw_quotes: dict[str, object] = {}
     try:
-        data = yf.download(symbols, period="1d", progress=False, threads=False, auto_adjust=True)
+        yahoo_symbols = [yahoo_symbol(symbol) for symbol in symbols]
+        yahoo_to_broker = dict(zip(yahoo_symbols, symbols, strict=True))
+        data = yf.download(yahoo_symbols, period="1d", progress=False, threads=False, auto_adjust=True)
         if "Close" in data.columns:
             close = data["Close"]
             if hasattr(close, "iloc"):
                 if hasattr(close, "columns"):
                     last = close.iloc[-1]
-                    for s in symbols:
-                        if s in last.index:
-                            raw_price = last[s]
-                            raw_quotes[s] = raw_price
+                    for yahoo_name, broker_name in yahoo_to_broker.items():
+                        if yahoo_name in last.index:
+                            raw_price = last[yahoo_name]
+                            raw_quotes[broker_name] = raw_price
                             if is_valid_price(raw_price):
-                                out[s] = float(raw_price)
+                                out[broker_name] = float(raw_price)
                 else:
                     raw_price = close.iloc[-1]
                     raw_quotes[symbols[0]] = raw_price
