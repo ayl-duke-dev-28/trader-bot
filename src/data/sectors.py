@@ -1,4 +1,4 @@
-"""Sector classification for the tech-focused universe.
+"""Sector classification for the configured US stock and ETF universe.
 
 Bucket names must match keys under `risk.sector_caps` in config.yaml.
 Symbols not listed fall through to `other`.
@@ -281,6 +281,51 @@ SECTOR_MAP: dict[str, str] = {
     "MELI": "other",
     "SE": "other",
 }
+
+# Broad-market classifications.  Keeping these explicit makes sector caps and
+# dynamic breadth/volatility sizing meaningful when the broad universe is
+# merged with the original tech list.
+_BROAD_SECTOR_SYMBOLS: dict[str, tuple[str, ...]] = {
+    "financials": (
+        "JPM", "BAC", "WFC", "C", "GS", "MS", "BLK", "SCHW",
+    ),
+    "consumer_staples": (
+        "KO", "PEP", "WMT", "COST", "PG", "CL", "KMB", "MO", "PM", "BTI",
+    ),
+    "consumer_discretionary": (
+        "TGT", "HD", "LOW", "MCD", "SBUX", "NKE", "DIS", "CMCSA", "F", "GM",
+        "DAL", "UAL", "AAL", "LUV", "HLT", "MAR", "MTCH", "SNAP", "PINS", "YELP",
+    ),
+    "communications": ("T", "VZ"),
+    "energy": ("XOM", "CVX", "COP", "SLB", "PSX", "MPC"),
+    "utilities": ("DUK", "SO", "NEE", "D", "CEG", "NRG", "TLN", "VST"),
+    "industrials": (
+        "LMT", "RTX", "BA", "GE", "CAT", "DE", "HON", "MMM", "UPS", "FDX",
+        "ETN", "PWR", "HUBB", "NVT", "GEV", "CLS", "SANM", "AEIS",
+    ),
+    "healthcare": (
+        "UNH", "JNJ", "PFE", "MRK", "ABBV", "LLY", "TMO", "DHR", "ABT", "BMY",
+        "MDT", "CVS", "ELV", "HUM", "CI", "RXRX", "TEM",
+    ),
+    "real_estate": ("DLR", "PLD", "AMT", "EQIX", "SPG", "O", "PSA"),
+    "ai_infra": ("ACN", "SNDK", "FLNC"),
+    "semiconductors": (
+        "AMKR", "CAMT", "TSEM", "UMC", "VECO", "OLED", "PI",
+    ),
+    "software": (
+        "ADSK", "FICO", "PAYX", "ADP", "GTLB", "APPF", "TYL", "PAYC", "PCOR",
+        "GDDY", "RNG", "DT",
+    ),
+    "cloud_infra": ("FSLY",),
+    "cybersecurity": ("GEN", "RPD"),
+    "fintech": ("FOUR",),
+    "other": ("HPQ", "GLW", "KEYS", "MSI", "AAOI", "EXTR", "BBAI"),
+}
+
+for _sector, _symbols in _BROAD_SECTOR_SYMBOLS.items():
+    for _symbol in _symbols:
+        # Preserve the original universe's more specific thematic buckets.
+        SECTOR_MAP.setdefault(_symbol, _sector)
 
 
 def sector_for(symbol: str) -> str:

@@ -1,4 +1,5 @@
-# Seed universe: liquid NYSE-listed names. Add/remove freely.
+# Broad-market expansion: liquid US-listed names. Add/remove freely.
+# This file is merged with tech_universe.txt by config.yaml; duplicates are ignored.
 # Lines starting with # are ignored.
 JPM
 BAC

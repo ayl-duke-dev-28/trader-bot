@@ -8,10 +8,12 @@ execution:
   fractional_shares: false  # false = whole-share buy orders; avoids split fractional fills in Alpaca
 
 universe:
-  # Source: which set of tickers to trade
+  # The files are merged in order and duplicate tickers are removed.
   source: file
-  file_path: src/data/tech_universe.txt
-  max_symbols: 250     # curated tech list across every sector of the industry
+  file_paths:
+    - src/data/tech_universe.txt
+    - src/data/nyse_universe.txt
+  max_symbols: 400     # currently 360 liquid US stocks and ETFs after deduplication
 
 data:
   history_days: 400    # how much daily history to pull per symbol
@@ -148,7 +150,7 @@ risk:
   entry_score_threshold: 0.55
   exit_score_threshold: 0.0
 
-  # sector concentration caps (tech-focused)
+  # sector concentration caps
   # Tighter caps on high-vol / correlated buckets (crypto, quantum, EV, space).
   sector_caps:
     mega_cap_tech: 5
@@ -167,6 +169,15 @@ risk:
     adtech: 2
     data_centers: 2
     etf_tech: 3
+    financials: 4
+    consumer_staples: 4
+    consumer_discretionary: 4
+    communications: 2
+    energy: 4
+    utilities: 4
+    industrials: 4
+    healthcare: 4
+    real_estate: 3
     other: 4
 
   # overnight gap protection
