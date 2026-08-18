@@ -8,13 +8,14 @@ when no candidate improves the score.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import json
 import math
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 import yaml
+import pandas as pd
 
 from src.config import Config
 
@@ -114,6 +115,8 @@ class OptimizationResult:
     runs: tuple[OptimizationRun, ...]
     stop_reason: str
     settings: OptimizationSettings
+    holdout_score: BacktestScore | None = None
+    holdout_summary: dict[str, Any] | None = None
 
 
 def _finite_float(value: Any, default: float = 0.0) -> float:
@@ -328,6 +331,51 @@ def parameter_specs_from_config(cfg: Config) -> tuple[ParameterSpec, ...]:
     return tuple(specs)
 
 
+def split_backtest_period(
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    *,
+    development_fraction: float = 0.60,
+    validation_fraction: float = 0.20,
+) -> dict[str, tuple[pd.Timestamp, pd.Timestamp]]:
+    """Create chronological tuning windows with a final untouched holdout."""
+    start = pd.Timestamp(start).normalize()
+    end = pd.Timestamp(end).normalize()
+    if start >= end:
+        raise ValueError("backtest start must be before end")
+    if development_fraction <= 0 or validation_fraction <= 0:
+        raise ValueError("development and validation fractions must be positive")
+    if development_fraction + validation_fraction >= 1:
+        raise ValueError("fractions must leave a positive holdout window")
+    total_days = (end - start).days
+    if total_days < 3:
+        raise ValueError("backtest period is too short for three windows")
+
+    development_end = start + pd.Timedelta(days=int(total_days * development_fraction))
+    validation_end = start + pd.Timedelta(
+        days=int(total_days * (development_fraction + validation_fraction))
+    )
+    validation_start = development_end + pd.Timedelta(days=1)
+    holdout_start = validation_end + pd.Timedelta(days=1)
+    if not (start <= development_end < validation_start <= validation_end < holdout_start <= end):
+        raise ValueError("backtest period is too short for requested fractions")
+    return {
+        "development": (start, development_end),
+        "validation": (validation_start, validation_end),
+        "holdout": (holdout_start, end),
+    }
+
+
+def attach_holdout(result: OptimizationResult, summary: Summary) -> OptimizationResult:
+    """Attach a final score that was not used to choose any parameters."""
+    safe_summary = _json_safe(dict(summary))
+    return replace(
+        result,
+        holdout_score=score_backtest(summary),
+        holdout_summary=safe_summary,
+    )
+
+
 def _config_copy(cfg: Config) -> Config:
     return Config(
         raw=deepcopy(cfg.raw),
@@ -524,6 +572,8 @@ def write_optimization_report(result: OptimizationResult, out_dir: Path) -> None
         "stop_reason": result.stop_reason,
         "settings": asdict(result.settings),
         "runs": [run.to_dict() for run in result.runs],
+        "holdout_score": None if result.holdout_score is None else result.holdout_score.to_dict(),
+        "holdout_summary": result.holdout_summary,
     }
     (out_dir / "optimization.json").write_text(
         json.dumps(_json_safe(payload), indent=2, sort_keys=True) + "\n"
@@ -540,6 +590,11 @@ def write_optimization_report(result: OptimizationResult, out_dir: Path) -> None
         f"**Best score:** {result.best_score.score}/100",
         f"**Stop reason:** `{result.stop_reason}`",
         f"**Backtests executed:** {len(result.runs)}",
+        *(
+            [f"**Holdout score:** {result.holdout_score.score}/100 (not used during optimization)"]
+            if result.holdout_score is not None
+            else []
+        ),
         "",
         "## What worked",
         "",
