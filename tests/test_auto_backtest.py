@@ -9,6 +9,9 @@ from src.backtest.optimizer import (
     AutoBacktestOptimizer,
     OptimizationSettings,
     ParameterSpec,
+    combine_window_scores,
+    optimizer_settings_from_config,
+    parameter_specs_from_config,
     score_backtest,
     write_optimization_report,
 )
@@ -188,3 +191,120 @@ def test_report_contains_scores_notes_iterations_and_replayable_config(tmp_path:
     assert "Iteration history" in markdown
     saved = yaml.safe_load((tmp_path / "optimized_config.yaml").read_text())
     assert saved == result.best_config.raw
+
+
+def test_window_score_penalizes_a_candidate_that_fails_validation():
+    overfit = combine_window_scores(
+        {
+            "development": _summary(
+                cagr=0.25,
+                sharpe=2.1,
+                max_drawdown=-0.08,
+                win_rate=0.66,
+                worst_day=-0.01,
+                trades=100,
+            ),
+            "validation": _summary(
+                cagr=-0.08,
+                sharpe=-0.1,
+                max_drawdown=-0.42,
+                win_rate=0.35,
+                worst_day=-0.08,
+                trades=40,
+            ),
+        }
+    )
+    stable = combine_window_scores(
+        {
+            "development": _summary(
+                cagr=0.14,
+                sharpe=1.25,
+                max_drawdown=-0.15,
+                win_rate=0.57,
+                worst_day=-0.025,
+                trades=80,
+            ),
+            "validation": _summary(
+                cagr=0.13,
+                sharpe=1.20,
+                max_drawdown=-0.16,
+                win_rate=0.56,
+                worst_day=-0.028,
+                trades=35,
+            ),
+        }
+    )
+
+    assert stable.assessment.score > overfit.assessment.score
+    assert overfit.window_scores["development"].score > overfit.window_scores["validation"].score
+    assert any("generalization" in note.lower() for note in overfit.assessment.weaknesses)
+
+
+def test_optimizer_accepts_multi_window_evaluations():
+    base = Config(raw={"risk": {"entry_score_threshold": 0.60}}, api_key="", api_secret="", is_live=False)
+
+    def evaluator(cfg: Config):
+        threshold = cfg.get("risk", "entry_score_threshold")
+        validation_cagr = 0.15 if threshold == 0.50 else -0.05
+        return combine_window_scores(
+            {
+                "development": _summary(
+                    cagr=0.16,
+                    sharpe=1.3,
+                    max_drawdown=-0.14,
+                    win_rate=0.56,
+                    worst_day=-0.025,
+                    trades=80,
+                ),
+                "validation": _summary(
+                    cagr=validation_cagr,
+                    sharpe=1.25 if threshold == 0.50 else 0.1,
+                    max_drawdown=-0.15 if threshold == 0.50 else -0.35,
+                    win_rate=0.56 if threshold == 0.50 else 0.4,
+                    worst_day=-0.025 if threshold == 0.50 else -0.07,
+                    trades=40,
+                ),
+            }
+        )
+
+    result = AutoBacktestOptimizer(
+        base,
+        evaluator,
+        parameters=[ParameterSpec(("risk", "entry_score_threshold"), (0.60, 0.50))],
+        settings=OptimizationSettings(target_score=90, max_iterations=2, max_evaluations=3),
+    ).run()
+
+    assert result.best_config.get("risk", "entry_score_threshold") == 0.50
+    assert "window_scores" in result.best_summary
+
+
+def test_optimizer_options_and_search_space_load_from_config():
+    cfg = Config(
+        raw={
+            "backtest": {
+                "auto_optimize": {
+                    "target_score": 91,
+                    "max_iterations": 3,
+                    "max_evaluations": 12,
+                    "min_improvement": 2,
+                    "parameters": [
+                        {
+                            "path": "risk.entry_score_threshold",
+                            "values": [0.45, 0.55, 0.65],
+                        }
+                    ],
+                }
+            }
+        },
+        api_key="",
+        api_secret="",
+        is_live=False,
+    )
+
+    settings = optimizer_settings_from_config(cfg)
+    parameters = parameter_specs_from_config(cfg)
+
+    assert settings == OptimizationSettings(91, 3, 12, 2)
+    assert parameters == (
+        ParameterSpec(("risk", "entry_score_threshold"), (0.45, 0.55, 0.65)),
+    )
