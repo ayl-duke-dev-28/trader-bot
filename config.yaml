@@ -203,6 +203,33 @@ logging:
   trades_file: logs/trades.xlsx   # per-activity Excel log (buy/sell/stop/skip)
 
 backtest:
+  # Bounded automatic tuning. Every candidate is scored on chronological
+  # development + validation windows; the final 20% is never used for tuning.
+  # The runner writes a proposed config and does not apply it unless --apply is
+  # explicitly supplied.
+  auto_optimize:
+    target_score: 85
+    max_iterations: 6
+    max_evaluations: 24
+    min_improvement: 1.0
+    development_fraction: 0.60
+    validation_fraction: 0.20
+    parameters:
+      - path: risk.entry_score_threshold
+        values: [0.45, 0.50, 0.55, 0.60, 0.65]
+      - path: risk.max_position_pct
+        values: [0.03, 0.04, 0.05, 0.06]
+      - path: risk.max_gross_exposure
+        values: [0.60, 0.70, 0.80]
+      - path: risk.stop_atr_mult
+        values: [2.0, 2.5, 3.0]
+      - path: risk.trailing_activate_pct
+        values: [0.06, 0.08, 0.10]
+      - path: risk.trailing_giveback_pct
+        values: [0.03, 0.04, 0.05]
+      - path: strategies.ml.min_probability
+        values: [0.52, 0.55, 0.58, 0.60]
+
   # Optional point-in-time macro overlay. It is backtest-only and never raises
   # exposure above the existing market-regime cap.
   macro_cycle:
