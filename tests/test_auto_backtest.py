@@ -3,16 +3,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
 import yaml
 
 from src.backtest.optimizer import (
     AutoBacktestOptimizer,
     OptimizationSettings,
     ParameterSpec,
+    attach_holdout,
     combine_window_scores,
     optimizer_settings_from_config,
     parameter_specs_from_config,
     score_backtest,
+    split_backtest_period,
     write_optimization_report,
 )
 from src.config import Config
@@ -308,3 +311,52 @@ def test_optimizer_options_and_search_space_load_from_config():
     assert parameters == (
         ParameterSpec(("risk", "entry_score_threshold"), (0.45, 0.55, 0.65)),
     )
+
+
+def test_period_split_reserves_a_strictly_unseen_holdout():
+    windows = split_backtest_period(
+        pd.Timestamp("2020-01-01"),
+        pd.Timestamp("2025-12-31"),
+        development_fraction=0.60,
+        validation_fraction=0.20,
+    )
+
+    assert set(windows) == {"development", "validation", "holdout"}
+    assert windows["development"][0] == pd.Timestamp("2020-01-01")
+    assert windows["development"][1] < windows["validation"][0]
+    assert windows["validation"][1] < windows["holdout"][0]
+    assert windows["holdout"][1] == pd.Timestamp("2025-12-31")
+
+
+def test_report_separates_untouched_holdout_score(tmp_path: Path):
+    base = Config(raw={"risk": {"entry_score_threshold": 0.55}}, api_key="", api_secret="", is_live=False)
+    result = AutoBacktestOptimizer(
+        base,
+        lambda _cfg: _summary(
+            cagr=0.12,
+            sharpe=1.1,
+            max_drawdown=-0.16,
+            win_rate=0.55,
+            worst_day=-0.03,
+            trades=60,
+        ),
+        parameters=[ParameterSpec(("risk", "entry_score_threshold"), (0.55, 0.60))],
+        settings=OptimizationSettings(max_iterations=1, max_evaluations=2),
+    ).run()
+    result = attach_holdout(
+        result,
+        _summary(
+            cagr=0.09,
+            sharpe=0.9,
+            max_drawdown=-0.18,
+            win_rate=0.52,
+            worst_day=-0.04,
+            trades=30,
+        ),
+    )
+
+    write_optimization_report(result, tmp_path)
+
+    assert result.holdout_score is not None
+    assert "Holdout score" in (tmp_path / "summary.md").read_text()
+    assert '"holdout_score"' in (tmp_path / "optimization.json").read_text()
