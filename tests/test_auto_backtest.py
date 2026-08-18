@@ -360,3 +360,17 @@ def test_report_separates_untouched_holdout_score(tmp_path: Path):
     assert result.holdout_score is not None
     assert "Holdout score" in (tmp_path / "summary.md").read_text()
     assert '"holdout_score"' in (tmp_path / "optimization.json").read_text()
+
+
+def test_explicit_apply_keeps_a_recoverable_config_backup(tmp_path: Path):
+    from scripts.auto_backtest import apply_optimized_config
+
+    active = tmp_path / "config.yaml"
+    optimized = tmp_path / "optimized_config.yaml"
+    active.write_text("risk:\n  max_position_pct: 0.05\n")
+    optimized.write_text("risk:\n  max_position_pct: 0.04\n")
+
+    backup = apply_optimized_config(optimized, active)
+
+    assert active.read_text() == optimized.read_text()
+    assert backup.read_text() == "risk:\n  max_position_pct: 0.05\n"
