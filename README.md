@@ -134,6 +134,7 @@ To deploy on a free Oracle Cloud VM see [docs/ORACLE_DEPLOY.md](docs/ORACLE_DEPL
 <!-- AUTO-GENERATED: commands from scripts/ and tests/ -->
 | Command | Description | Alpaca keys required |
 | --- | --- | --- |
+| `python scripts/auto_backtest.py` | Repeatedly score and tune allow-listed settings, then test the winner on an untouched holdout | No |
 | `python scripts/backtest.py` | Run the primary live-path backtest; walk-forward ML is on by default | No |
 | `python scripts/backtest_commodities.py` | Run the commodity ETF strategy in rolling four-month out-of-sample windows | No |
 | `python scripts/fetch_macro_data.py` | Download point-in-time initial-release macro history from FRED | No Alpaca keys; requires `FRED_API_KEY` |
@@ -300,6 +301,61 @@ python scripts/backtest.py --years 5 --out-dir reports/backtests/walk_forward_5y
 python scripts/backtest.py --years 20 --out-dir reports/backtests/walk_forward_20y
 python scripts/backtest.py --years 1 --max-symbols 50
 ```
+
+### Automatic scoring and optimization
+
+`python scripts/auto_backtest.py` automates a bounded research loop around the
+same live-path backtester. It does not ask an LLM to rewrite trading code. It
+changes only the parameter paths and candidate values allow-listed under
+`backtest.auto_optimize.parameters` in `config.yaml`.
+
+Each candidate config is run on chronological development and validation
+periods. Validation receives 60% of the combined score. When validation trails
+development by more than eight points, the objective receives an additional
+generalization-gap penalty. The final 20% of history is held out completely
+until the search stops, then used once to report an honest holdout score.
+
+The 1–100 score is a weighted research rubric:
+
+| Component | Weight | 0-point band | 100-point band |
+| --- | ---: | ---: | ---: |
+| CAGR | 25% | -10% | 20% |
+| Sharpe ratio | 30% | -0.50 | 2.00 |
+| Maximum drawdown | 25% | 50% | 10% or less |
+| Closed-trade win rate | 10% | 30% | 65% |
+| Worst daily loss | 10% | 10% | 1.5% or less |
+
+Component scores interpolate between those bands and clamp at 0/100. Runs with
+fewer than 30 trades are discounted; a run with no trades is capped at 25, so
+staying in cash cannot earn an excellent score. The optimizer stops when it
+reaches `target_score`, cannot improve by `min_improvement`, or exhausts the
+iteration/evaluation limits. “Optimal” therefore means the best measured
+candidate in the configured finite search—not a guarantee of future returns.
+
+Start with a small smoke run, then use a longer research horizon:
+
+```bash
+# Fast plumbing check; not enough evidence for selecting live parameters.
+python scripts/auto_backtest.py --years 2 --max-symbols 50 --max-evaluations 4
+
+# Default 8-year run with walk-forward ML and an untouched 20% holdout.
+python scripts/auto_backtest.py --years 8 \
+  --out-dir reports/backtests/auto_optimize_8y
+```
+
+Every run writes:
+
+- `summary.md` with the best score, strengths, weaknesses, and iteration table;
+- `optimization.json` with every candidate score, metric component, note, and
+  accepted/rejected decision;
+- `optimized_config.yaml`, a replayable proposed configuration;
+- `holdout/summary.txt`, `equity_curve.csv`, and `trades.csv` for the untouched
+  final period.
+
+The proposed config is not activated by default. Review it and paper trade it.
+Supplying `--apply` replaces the selected `--config` only after saving the
+previous file beside it as `config.yaml.before-auto-backtest` (or a timestamped
+variant if that backup already exists).
 
 ### Commodity walk-forward strategy
 

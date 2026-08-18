@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pandas as pd
 import yaml
@@ -374,3 +376,82 @@ def test_explicit_apply_keeps_a_recoverable_config_backup(tmp_path: Path):
 
     assert active.read_text() == optimized.read_text()
     assert backup.read_text() == "risk:\n  max_position_pct: 0.05\n"
+
+
+def test_cli_runs_tuning_validation_and_holdout_without_network(
+    tmp_path: Path, monkeypatch, capsys
+):
+    import scripts.auto_backtest as cli
+
+    active_config = tmp_path / "config.yaml"
+    active_config.write_text("risk:\n  entry_score_threshold: 0.55\n")
+    out_dir = tmp_path / "report"
+    cfg = Config(
+        raw={
+            "risk": {"entry_score_threshold": 0.55},
+            "strategies": {"ml": {"enabled": False}},
+            "backtest": {
+                "warmup_days": 20,
+                "auto_optimize": {
+                    "target_score": 80,
+                    "max_iterations": 1,
+                    "max_evaluations": 2,
+                    "parameters": [
+                        {"path": "risk.entry_score_threshold", "values": [0.55]}
+                    ],
+                },
+                "macro_cycle": {"enabled": False},
+            },
+        },
+        api_key="",
+        api_secret="",
+        is_live=False,
+    )
+    summary = _summary(
+        cagr=0.20,
+        sharpe=1.7,
+        max_drawdown=-0.10,
+        win_rate=0.62,
+        worst_day=-0.02,
+        trades=80,
+    )
+    fake_result = SimpleNamespace(
+        summary=summary,
+        trades_log=pd.DataFrame(),
+        equity_diagnostics=pd.DataFrame(
+            {"date": ["2025-01-01"], "equity": [100_000.0]}
+        ),
+        equity_curve=pd.Series([100_000.0], index=[pd.Timestamp("2025-01-01")]),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "auto_backtest.py",
+            "--config",
+            str(active_config),
+            "--years",
+            "1",
+            "--out-dir",
+            str(out_dir),
+        ],
+    )
+
+    with (
+        patch.object(cli, "load_config", return_value=cfg),
+        patch("src.data.universe.load_universe", return_value=["QQQ"]),
+        patch(
+            "src.data.market_data.get_history_many",
+            return_value={"QQQ": pd.DataFrame({"close": [100.0]})},
+        ),
+        patch("src.backtest.engine.backtest", return_value=fake_result) as run_backtest,
+        patch("src.backtest.simulator.write_simulation_report"),
+    ):
+        assert cli.main() == 0
+
+    assert run_backtest.call_count == 3
+    assert (out_dir / "optimization.json").exists()
+    assert (out_dir / "optimized_config.yaml").exists()
+    output = capsys.readouterr().out
+    assert "Best tuning score" in output
+    assert "Holdout score" in output
+    assert "Config not applied" in output
