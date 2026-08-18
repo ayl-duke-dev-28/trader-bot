@@ -42,6 +42,15 @@ class BacktestScore:
 
 
 @dataclass(frozen=True)
+class BacktestEvaluation:
+    """One optimizer objective assembled from one or more historical windows."""
+
+    assessment: BacktestScore
+    summary: dict[str, Any]
+    window_scores: dict[str, BacktestScore]
+
+
+@dataclass(frozen=True)
 class ParameterSpec:
     """An allow-listed config leaf and the finite values it may take."""
 
@@ -199,6 +208,126 @@ def score_backtest(summary: Summary) -> BacktestScore:
     )
 
 
+def combine_window_scores(
+    windows: Mapping[str, Summary],
+    weights: Mapping[str, float] | None = None,
+) -> BacktestEvaluation:
+    """Build a conservative objective from development and validation runs.
+
+    Validation receives 60% of the default weight.  A development score more
+    than eight points above validation incurs an additional generalization-gap
+    penalty, preventing an obviously overfit candidate from winning the search.
+    """
+    if not windows:
+        raise ValueError("at least one scoring window is required")
+    if weights is None:
+        if set(windows) == {"development", "validation"}:
+            weights = {"development": 0.40, "validation": 0.60}
+        else:
+            weights = {name: 1.0 for name in windows}
+    missing = set(windows) - set(weights)
+    if missing:
+        raise ValueError(f"missing weights for windows: {', '.join(sorted(missing))}")
+    total_weight = sum(max(0.0, _finite_float(weights[name])) for name in windows)
+    if total_weight <= 0:
+        raise ValueError("window weights must include a positive value")
+
+    window_scores = {name: score_backtest(summary) for name, summary in windows.items()}
+    normalized = {
+        name: max(0.0, _finite_float(weights[name])) / total_weight for name in windows
+    }
+    component_names = next(iter(window_scores.values())).components
+    components = {
+        component: round(
+            sum(window_scores[name].components[component] * normalized[name] for name in windows),
+            2,
+        )
+        for component in component_names
+    }
+    combined = sum(window_scores[name].score * normalized[name] for name in windows)
+
+    strengths: list[str] = []
+    weaknesses: list[str] = []
+    reference_name = "validation" if "validation" in window_scores else next(reversed(window_scores))
+    reference = window_scores[reference_name]
+    strengths.extend(f"{reference_name.title()}: {note}" for note in reference.strengths)
+    weaknesses.extend(f"{reference_name.title()}: {note}" for note in reference.weaknesses)
+
+    if "development" in window_scores and "validation" in window_scores:
+        gap = window_scores["development"].score - window_scores["validation"].score
+        if gap > 8:
+            combined -= (gap - 8) * 0.50
+            weaknesses.append(
+                f"Generalization gap was {gap} points: validation trailed development"
+            )
+        elif gap <= 5:
+            strengths.append("Development and validation scores were consistent")
+
+    assessment = BacktestScore(
+        score=max(1, min(100, int(round(combined)))),
+        components=components,
+        strengths=tuple(strengths),
+        weaknesses=tuple(weaknesses),
+    )
+    summary = {
+        "window_scores": {name: score.score for name, score in window_scores.items()},
+        "windows": {name: _json_safe(value) for name, value in windows.items()},
+    }
+    return BacktestEvaluation(
+        assessment=assessment,
+        summary=summary,
+        window_scores=window_scores,
+    )
+
+
+DEFAULT_PARAMETERS = (
+    ParameterSpec(("risk", "entry_score_threshold"), (0.45, 0.50, 0.55, 0.60, 0.65)),
+    ParameterSpec(("risk", "max_position_pct"), (0.03, 0.04, 0.05, 0.06)),
+    ParameterSpec(("risk", "max_gross_exposure"), (0.60, 0.70, 0.80)),
+    ParameterSpec(("risk", "stop_atr_mult"), (2.0, 2.5, 3.0)),
+    ParameterSpec(("risk", "trailing_activate_pct"), (0.06, 0.08, 0.10)),
+    ParameterSpec(("risk", "trailing_giveback_pct"), (0.03, 0.04, 0.05)),
+    ParameterSpec(("strategies", "ml", "min_probability"), (0.52, 0.55, 0.58, 0.60)),
+)
+
+
+def optimizer_settings_from_config(cfg: Config) -> OptimizationSettings:
+    raw = cfg.get("backtest", "auto_optimize", default={}) or {}
+    return OptimizationSettings(
+        target_score=int(raw.get("target_score", 85)),
+        max_iterations=int(raw.get("max_iterations", 6)),
+        max_evaluations=int(raw.get("max_evaluations", 24)),
+        min_improvement=float(raw.get("min_improvement", 1.0)),
+    )
+
+
+def parameter_specs_from_config(cfg: Config) -> tuple[ParameterSpec, ...]:
+    raw = cfg.get("backtest", "auto_optimize", "parameters", default=None)
+    if raw is None:
+        return DEFAULT_PARAMETERS
+    if not isinstance(raw, list):
+        raise ValueError("backtest.auto_optimize.parameters must be a list")
+    specs: list[ParameterSpec] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"optimizer parameter {index} must be a mapping")
+        path = item.get("path")
+        values = item.get("values")
+        if not isinstance(path, str) or not path.strip():
+            raise ValueError(f"optimizer parameter {index} needs a dotted path")
+        if not isinstance(values, list) or not values:
+            raise ValueError(f"optimizer parameter {path} needs a non-empty values list")
+        specs.append(
+            ParameterSpec(
+                path=tuple(part.strip() for part in path.split(".") if part.strip()),
+                values=tuple(values),
+            )
+        )
+    if not specs:
+        raise ValueError("at least one optimization parameter is required")
+    return tuple(specs)
+
+
 def _config_copy(cfg: Config) -> Config:
     return Config(
         raw=deepcopy(cfg.raw),
@@ -270,8 +399,13 @@ class AutoBacktestOptimizer:
         changes: dict[str, Any],
         accepted: bool,
     ) -> tuple[BacktestScore, dict[str, Any], OptimizationRun]:
-        summary = _extract_summary(self.evaluator(cfg))
-        assessment = score_backtest(summary)
+        evaluated = self.evaluator(cfg)
+        if isinstance(evaluated, BacktestEvaluation):
+            summary = evaluated.summary
+            assessment = evaluated.assessment
+        else:
+            summary = _extract_summary(evaluated)
+            assessment = score_backtest(summary)
         run = OptimizationRun(
             evaluation=evaluation,
             iteration=iteration,
