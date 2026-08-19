@@ -170,6 +170,58 @@ def test_optimizer_stops_when_no_candidate_improves():
     assert result.best_config.get("risk", "max_position_pct") == 0.05
 
 
+def test_optimizer_stops_evaluating_immediately_at_target_score():
+    base = Config(
+        raw={"risk": {"entry_score_threshold": 0.70}},
+        api_key="",
+        api_secret="",
+        is_live=False,
+    )
+    evaluated: list[float] = []
+
+    def evaluator(cfg: Config):
+        threshold = cfg.get("risk", "entry_score_threshold")
+        evaluated.append(threshold)
+        if threshold == 0.50:
+            return _summary(
+                cagr=0.22,
+                sharpe=1.8,
+                max_drawdown=-0.09,
+                win_rate=0.64,
+                worst_day=-0.018,
+                trades=100,
+            )
+        return _summary(
+            cagr=-0.05,
+            sharpe=0.0,
+            max_drawdown=-0.35,
+            win_rate=0.40,
+            worst_day=-0.07,
+            trades=50,
+        )
+
+    result = AutoBacktestOptimizer(
+        base,
+        evaluator,
+        parameters=[
+            ParameterSpec(
+                ("risk", "entry_score_threshold"),
+                (0.70, 0.50, 0.40, 0.30),
+            )
+        ],
+        settings=OptimizationSettings(
+            target_score=85,
+            max_iterations=5,
+            max_evaluations=10,
+        ),
+    ).run()
+
+    assert result.stop_reason == "target_score_reached"
+    assert result.best_score.score >= 85
+    assert result.best_config.get("risk", "entry_score_threshold") == 0.50
+    assert evaluated == [0.70, 0.50]
+
+
 def test_report_contains_scores_notes_iterations_and_replayable_config(tmp_path: Path):
     base = Config(raw={"risk": {"entry_score_threshold": 0.60}}, api_key="", api_secret="", is_live=False)
     result = AutoBacktestOptimizer(
