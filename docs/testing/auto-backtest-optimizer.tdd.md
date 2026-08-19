@@ -22,6 +22,7 @@ No plan file was supplied. These journeys were derived from the request:
 | Untouched holdout | The targeted suite failed importing missing `attach_holdout` | Ten tests passed | The final chronological window is excluded from tuning and reported separately |
 | Safe apply | The targeted suite failed with `ModuleNotFoundError: scripts.auto_backtest` | Eleven tests passed | Applying a winning config first saves the active config beside it |
 | CLI orchestration | Added offline integration coverage with all network and backtest execution mocked | Twelve tests passed | One baseline candidate causes development, validation, and final holdout runs and emits the expected artifacts/output |
+| Immediate score threshold | The targeted test showed evaluations continuing after a candidate crossed 85 | Thirteen tests passed | The first candidate at or above the configured target is accepted and no later candidate is run |
 
 All RED/GREEN checkpoints are separate commits on `main`; none were squashed.
 
@@ -41,6 +42,7 @@ All RED/GREEN checkpoints are separate commits on `main`; none were squashed.
 | 10 | Holdout score is distinct in JSON and Markdown | `test_report_separates_untouched_holdout_score` | Integration | PASS |
 | 11 | Explicit apply preserves the prior active config | `test_explicit_apply_keeps_a_recoverable_config_backup` | Integration | PASS |
 | 12 | CLI orchestration executes development, validation, and holdout offline | `test_cli_runs_tuning_validation_and_holdout_without_network` | Integration | PASS |
+| 13 | Reaching 85 stops candidate evaluation immediately | `test_optimizer_stops_evaluating_immediately_at_target_score` | Unit | PASS |
 
 ## Validation and coverage
 
@@ -50,13 +52,13 @@ Commands run:
 PYTHONPATH=.venv/lib/python3.14/site-packages python3 -m pytest \
   tests/test_auto_backtest.py --cov=src.backtest.optimizer \
   --cov=scripts.auto_backtest --cov-report=term-missing -q
-12 passed
+13 passed
 src/backtest/optimizer.py: 86%
 scripts/auto_backtest.py: 81%
 combined feature coverage: 85%
 
 PYTHONPATH=.venv/lib/python3.14/site-packages python3 -m pytest -q
-102 passed, 7 warnings
+103 passed, 7 warnings
 ```
 
 `python3 -m compileall -q src scripts tests`, CLI `--help`, and

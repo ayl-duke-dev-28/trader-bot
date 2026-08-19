@@ -328,9 +328,11 @@ The 1–100 score is a weighted research rubric:
 Component scores interpolate between those bands and clamp at 0/100. Runs with
 fewer than 30 trades are discounted; a run with no trades is capped at 25, so
 staying in cash cannot earn an excellent score. The optimizer stops when it
-reaches `target_score`, cannot improve by `min_improvement`, or exhausts the
-iteration/evaluation limits. “Optimal” therefore means the best measured
-candidate in the configured finite search—not a guarantee of future returns.
+reaches `target_score` (85 by default), cannot improve by `min_improvement`, or
+exhausts the iteration/evaluation limits. Reaching the target is an immediate
+hard stop: later candidates in that round are not run. “Optimal” therefore
+means the best measured candidate in the configured finite search—not a
+guarantee of future returns.
 
 Start with a small smoke run, then use a longer research horizon:
 

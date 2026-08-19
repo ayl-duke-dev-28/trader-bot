@@ -510,6 +510,19 @@ class AutoBacktestOptimizer:
                             accepted=False,
                         )
                         runs.append(run)
+                        if assessment.score >= self.settings.target_score:
+                            runs[-1] = OptimizationRun(
+                                **{**asdict(runs[-1]), "accepted": True}
+                            )
+                            return OptimizationResult(
+                                base_config=_config_copy(self.base_config),
+                                best_config=_config_copy(candidate),
+                                best_score=assessment,
+                                best_summary=_json_safe(summary),
+                                runs=tuple(runs),
+                                stop_reason="target_score_reached",
+                                settings=self.settings,
+                            )
                         candidates.append((assessment, summary, candidate, len(runs) - 1))
                     if limit_hit:
                         break
